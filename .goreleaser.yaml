@@ -34,37 +34,19 @@ checksum:
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
-dockers:
-  - image_templates:
-      - "ghcr.io/ygelfand/posterlink:{{ .Version }}-amd64"
-    use: buildx
-    goarch: amd64
+dockers_v2:
+  - images:
+      - ghcr.io/ygelfand/posterlink
+    tags:
+      - "{{ .Version }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
     dockerfile: Dockerfile.goreleaser
-    build_flag_templates:
-      - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.source=https://github.com/ygelfand/posterlink"
-  - image_templates:
-      - "ghcr.io/ygelfand/posterlink:{{ .Version }}-arm64"
-    use: buildx
-    goarch: arm64
-    dockerfile: Dockerfile.goreleaser
-    build_flag_templates:
-      - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.source=https://github.com/ygelfand/posterlink"
-
-docker_manifests:
-  - name_template: "ghcr.io/ygelfand/posterlink:{{ .Version }}"
-    image_templates:
-      - "ghcr.io/ygelfand/posterlink:{{ .Version }}-amd64"
-      - "ghcr.io/ygelfand/posterlink:{{ .Version }}-arm64"
-  - name_template: "ghcr.io/ygelfand/posterlink:latest"
-    image_templates:
-      - "ghcr.io/ygelfand/posterlink:{{ .Version }}-amd64"
-      - "ghcr.io/ygelfand/posterlink:{{ .Version }}-arm64"
+    labels:
+      org.opencontainers.image.source: https://github.com/ygelfand/posterlink
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
 
 release:
   prerelease: auto
