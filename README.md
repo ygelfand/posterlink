@@ -77,6 +77,9 @@ Adding one is a single file under `internal/provider/<name>/` that calls
 - **`unsplash`** — photo wallpapers from the official Unsplash API
   (`/photos/random`). Needs an `access_key` (the app's Client-ID); supports
   `orientation`, `count` (≤30 per refresh), `size`, and an optional `query`.
+- **`steam`** — video-game posters from Steam's 600x900 portrait capsule art.
+  No API key; pulls popular app IDs from the charts/featured endpoints and
+  HEAD-validates each image. Supports `size` (`1x`/`2x`), `sources`, and `cc`.
 
 ## Running
 

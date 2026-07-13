@@ -24,6 +24,10 @@ run: ## Run posterlink directly (e.g. make run ARGS="serve -v")
 serve: ## Run the server against ./posterlink.yaml
 	go run . serve --config posterlink.yaml -v
 
+.PHONY: preview
+preview: ## Open an HTML contact sheet of the configured providers/lists
+	go run . preview --config posterlink.yaml
+
 .PHONY: test
 test: ## Run tests
 	go test -v ./...

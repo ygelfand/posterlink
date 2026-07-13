@@ -32,3 +32,14 @@ providers:
     count: 30 # photos per refresh (max 30)
     size: regular # raw | full | regular | small | thumb
     # query: nature   # optional search term
+
+  # Video-game "posters" from Steam's 600x900 portrait capsule art. Needs no
+  # API key. Disabled by default.
+  steam:
+    enabled: false
+    weight: 0.3
+    size: 2x # 2x (1200x1800) | 1x (600x900)
+    sources: [most_played, top_sellers] # the two clean, popular sources
+    count: 100 # results per search-based source (top_sellers)
+    cc: us # store country
+    validate: true # HEAD-check each image; drop apps without portrait art
