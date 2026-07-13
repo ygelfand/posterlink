@@ -11,6 +11,9 @@ permissions:
   contents: write
   packages: write
 
+env:
+  IMAGE: ghcr.io/ygelfand/posterlink
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -41,7 +44,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -58,8 +61,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Push :latest (main)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:latest
+          build-args: |
+            VERSION=main
+            GIT_COMMIT=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/ygelfand/posterlink
+            org.opencontainers.image.revision=${{ github.sha }}
+
       - name: Run GoReleaser (build check)
-        if: "!startsWith(github.ref, 'refs/tags/v')"
+        if: github.event_name == 'pull_request'
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
