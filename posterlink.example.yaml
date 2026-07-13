@@ -1,0 +1,34 @@
+# posterlink configuration.
+#
+# Every key can also be set via environment variables prefixed POSTERLINK_,
+# with "." replaced by "_" (e.g. POSTERLINK_PORT, POSTERLINK_PROVIDERS_TMDB_WEIGHT).
+# TMDB_API_KEY / TMDB_ACCESS_TOKEN are also accepted directly.
+
+port: 8088
+refresh_interval: 30m
+
+providers:
+  tmdb:
+    enabled: true
+    weight: 1.0
+    # Provide either a v3 api_key or a v4 access_token.
+    api_key: "" # or set TMDB_API_KEY
+    # access_token: ""
+    size: w780 # w92 w154 w185 w342 w500 w780 original
+    pages: 3
+    lists:
+      - trending/movie/week
+      - movie/popular
+      - movie/now_playing
+
+  # A second provider, backed by the official Unsplash API, to blend photo
+  # wallpapers in by weight. Register an app at unsplash.com/developers to get
+  # an Access Key (sent as the Client-ID). Disabled by default.
+  unsplash:
+    enabled: false
+    weight: 0.2
+    access_key: "" # a.k.a. client_id; or set UNSPLASH_ACCESS_KEY
+    orientation: portrait # portrait | landscape | squarish
+    count: 30 # photos per refresh (max 30)
+    size: regular # raw | full | regular | small | thumb
+    # query: nature   # optional search term

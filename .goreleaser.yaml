@@ -1,0 +1,78 @@
+# .goreleaser.yaml
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/ygelfand/posterlink/internal/config.Version={{.Version}}
+      - -X github.com/ygelfand/posterlink/internal/config.GitCommit={{.Commit}}
+      - -X github.com/ygelfand/posterlink/internal/config.BuildDate={{.Date}}
+
+archives:
+  - formats: ["tar.gz"]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+dockers:
+  - image_templates:
+      - "ghcr.io/ygelfand/posterlink:{{ .Version }}-amd64"
+    use: buildx
+    goarch: amd64
+    dockerfile: Dockerfile.goreleaser
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/ygelfand/posterlink"
+  - image_templates:
+      - "ghcr.io/ygelfand/posterlink:{{ .Version }}-arm64"
+    use: buildx
+    goarch: arm64
+    dockerfile: Dockerfile.goreleaser
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/ygelfand/posterlink"
+
+docker_manifests:
+  - name_template: "ghcr.io/ygelfand/posterlink:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/ygelfand/posterlink:{{ .Version }}-amd64"
+      - "ghcr.io/ygelfand/posterlink:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/ygelfand/posterlink:latest"
+    image_templates:
+      - "ghcr.io/ygelfand/posterlink:{{ .Version }}-amd64"
+      - "ghcr.io/ygelfand/posterlink:{{ .Version }}-arm64"
+
+release:
+  prerelease: auto
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

@@ -1,0 +1,10 @@
+# Minimal runtime image consumed by GoReleaser, which supplies the prebuilt
+# binary. For a source build use ./Dockerfile instead.
+FROM alpine:3.24
+RUN apk add --no-cache ca-certificates && \
+	addgroup -S posterlink && adduser -S posterlink -G posterlink
+COPY posterlink /usr/local/bin/posterlink
+USER posterlink
+EXPOSE 8088
+ENTRYPOINT ["posterlink"]
+CMD ["serve"]

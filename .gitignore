@@ -1,0 +1,5 @@
+/bin/
+/dist/
+posterlink.yaml
+!posterlink.example.yaml
+*.out
