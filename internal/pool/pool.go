@@ -18,10 +18,10 @@ type Source struct {
 
 // Pool is a concurrency-safe, weighted collection of image URLs.
 type Pool struct {
-	mu       sync.RWMutex
-	sources  []Source
-	total    float64
-	last     string // last served URL, to avoid immediate repeats
+	mu      sync.RWMutex
+	sources []Source
+	total   float64
+	last    string // last served URL, to avoid immediate repeats
 }
 
 // New returns an empty pool.

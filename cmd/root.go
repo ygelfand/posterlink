@@ -11,8 +11,8 @@ import (
 var cfgFile string
 
 var rootCmd = &cobra.Command{
-	Use:           "posterlink",
-	Short:         "A random movie-poster redirect service for wall-panel screensavers",
+	Use:   "posterlink",
+	Short: "A random movie-poster redirect service for wall-panel screensavers",
 	Long: `posterlink serves a single URL that 302-redirects to a different image on
 every request, so a screensaver (e.g. Home Assistant wallpanel) can rotate
 posters with zero client-side state.

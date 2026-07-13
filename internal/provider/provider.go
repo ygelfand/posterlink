@@ -31,6 +31,19 @@ type Provider interface {
 	Fetch(ctx context.Context) ([]string, error)
 }
 
+// Group is a labeled subset of a provider's images, used for inspection.
+type Group struct {
+	Label string
+	URLs  []string
+}
+
+// Previewer is an optional interface for providers that can break their output
+// into labeled groups (e.g. TMDB, one group per list endpoint). Providers that
+// don't implement it are previewed as a single group.
+type Previewer interface {
+	Preview(ctx context.Context) ([]Group, error)
+}
+
 // Factory constructs a provider from its scoped configuration.
 type Factory func(opts Options) (Provider, error)
 

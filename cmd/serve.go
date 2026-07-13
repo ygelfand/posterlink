@@ -12,10 +12,6 @@ import (
 	"github.com/ygelfand/posterlink/internal/config"
 	"github.com/ygelfand/posterlink/internal/provider"
 	"github.com/ygelfand/posterlink/internal/server"
-
-	// Register the built-in providers.
-	_ "github.com/ygelfand/posterlink/internal/provider/tmdb"
-	_ "github.com/ygelfand/posterlink/internal/provider/unsplash"
 )
 
 var verbose bool

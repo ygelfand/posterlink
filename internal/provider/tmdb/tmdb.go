@@ -77,30 +77,80 @@ type listResponse struct {
 	} `json:"results"`
 }
 
-// Fetch pulls the configured list endpoints/pages and returns deduped CDN URLs.
+// Fetch pulls every configured list and returns CDN URLs deduped across lists.
 func (t *TMDB) Fetch(ctx context.Context) ([]string, error) {
 	seen := make(map[string]struct{})
 	var urls []string
 	var firstErr error
 
 	for _, list := range t.lists {
-		for page := 1; page <= t.pages; page++ {
-			paths, err := t.fetchPage(ctx, list, page)
-			if err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
+		got, err := t.fetchList(ctx, list)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for _, u := range got {
+			if _, dup := seen[u]; dup {
 				continue
 			}
-			for _, p := range paths {
-				// poster_path already begins with "/"; avoid a double slash.
-				u := t.imageBase + t.size + p
-				if _, dup := seen[u]; dup {
-					continue
-				}
-				seen[u] = struct{}{}
-				urls = append(urls, u)
+			seen[u] = struct{}{}
+			urls = append(urls, u)
+		}
+	}
+
+	if len(urls) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return urls, nil
+}
+
+// Preview returns one labeled group per configured list, deduped within each
+// list but not across lists (so overlap between lists is visible).
+func (t *TMDB) Preview(ctx context.Context) ([]provider.Group, error) {
+	var groups []provider.Group
+	var firstErr error
+
+	for _, list := range t.lists {
+		urls, err := t.fetchList(ctx, list)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
 			}
+			continue
+		}
+		groups = append(groups, provider.Group{Label: list, URLs: urls})
+	}
+
+	if len(groups) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return groups, nil
+}
+
+// fetchList pulls all pages of a single list, deduped within the list.
+func (t *TMDB) fetchList(ctx context.Context, list string) ([]string, error) {
+	seen := make(map[string]struct{})
+	var urls []string
+	var firstErr error
+
+	for page := 1; page <= t.pages; page++ {
+		paths, err := t.fetchPage(ctx, list, page)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for _, p := range paths {
+			// poster_path already begins with "/"; avoid a double slash.
+			u := t.imageBase + t.size + p
+			if _, dup := seen[u]; dup {
+				continue
+			}
+			seen[u] = struct{}{}
+			urls = append(urls, u)
 		}
 	}
 
