@@ -1,0 +1,10 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      # Deferred Close() on a response body has nothing useful to do with the
+      # returned error; excluding it is the conventional errcheck exclusion.
+      exclude-functions:
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
