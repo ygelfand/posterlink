@@ -50,7 +50,7 @@ providers:
   artic:
     enabled: false
     weight: 0.3
-    width: 1080
+    width: 1080 # output width in px; 0 = original full resolution
     fit: fill # fill (crop to aspect) | fit (letterbox whole work)
     aspect: "9:16" # target aspect for fill
     orientation: any # any | portrait

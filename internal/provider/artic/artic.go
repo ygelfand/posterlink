@@ -212,10 +212,16 @@ func (a *ArtIC) searchURLs(ctx context.Context, q string) ([]string, error) {
 }
 
 // imageURL builds the IIIF URL, cropping to the target aspect in fill mode.
+// A width <= 0 requests the original (full) resolution, best paired with fit
+// mode.
 func (a *ArtIC) imageURL(base, id string, w, h int) string {
 	if !a.fill {
-		// Whole work, scaled to width; the consumer letterboxes.
-		return fmt.Sprintf("%s/%s/full/%d,/0/default.jpg", base, id, a.width)
+		// Whole work; the consumer letterboxes (or pans/zooms).
+		size := "full"
+		if a.width > 0 {
+			size = fmt.Sprintf("%d,", a.width)
+		}
+		return fmt.Sprintf("%s/%s/full/%s/0/default.jpg", base, id, size)
 	}
 
 	// Centered region matching the target aspect (aspectW:aspectH).
@@ -231,7 +237,9 @@ func (a *ArtIC) imageURL(base, id string, w, h int) string {
 		cropH = w * a.aspectH / a.aspectW
 		y = (h - cropH) / 2
 	}
-	outW := a.width
-	outH := a.width * a.aspectH / a.aspectW
-	return fmt.Sprintf("%s/%s/%d,%d,%d,%d/%d,%d/0/default.jpg", base, id, x, y, cropW, cropH, outW, outH)
+	size := "full"
+	if a.width > 0 {
+		size = fmt.Sprintf("%d,%d", a.width, a.width*a.aspectH/a.aspectW)
+	}
+	return fmt.Sprintf("%s/%s/%d,%d,%d,%d/%s/0/default.jpg", base, id, x, y, cropW, cropH, size)
 }
