@@ -78,8 +78,11 @@ Adding one is a single file under `internal/provider/<name>/` that calls
   (`/photos/random`). Needs an `access_key` (the app's Client-ID); supports
   `orientation`, `count` (≤30 per refresh), `size`, and an optional `query`.
 - **`steam`** — video-game posters from Steam's 600x900 portrait capsule art.
-  No API key; pulls popular app IDs from the charts/featured endpoints and
+  No API key; pulls popular app IDs from the charts/search endpoints and
   HEAD-validates each image. Supports `size` (`1x`/`2x`), `sources`, and `cc`.
+- **`artic`** — famous paintings from the Art Institute of Chicago (no API key).
+  Uses IIIF to crop server-side: `fit: fill` full-bleed-crops to your screen
+  `aspect`; `fit: fit` letterboxes the whole work. Curated by `artists`.
 
 ## Running
 

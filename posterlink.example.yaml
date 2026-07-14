@@ -43,3 +43,16 @@ providers:
     count: 100 # results per search-based source (top_sellers)
     cc: us # store country
     validate: true # HEAD-check each image; drop apps without portrait art
+
+  # Famous paintings from the Art Institute of Chicago (no API key). IIIF crops
+  # server-side: fill = full-bleed crop to your screen aspect; fit = whole work
+  # letterboxed. Disabled by default.
+  artic:
+    enabled: false
+    weight: 0.3
+    width: 1080
+    fit: fill # fill (crop to aspect) | fit (letterbox whole work)
+    aspect: "9:16" # target aspect for fill
+    orientation: any # any | portrait
+    # artists: [Claude Monet, Vincent van Gogh, Georges Seurat]  # default: a curated famous set
+    # query: painting   # used only when artists is empty
