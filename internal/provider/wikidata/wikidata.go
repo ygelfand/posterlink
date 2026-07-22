@@ -57,7 +57,7 @@ func New(opts provider.Options) (provider.Provider, error) {
 		creator:      opts.String("creator", ""),
 		genre:        opts.String("genre", ""),
 		userAgent:    opts.String("user_agent", "posterlink/1.0 (https://github.com/ygelfand/posterlink)"),
-		client:       &http.Client{Timeout: 30 * time.Second},
+		client:       &http.Client{Timeout: 60 * time.Second},
 	}, nil
 }
 
@@ -78,7 +78,7 @@ func (w *Wikidata) buildQuery() string {
 	if w.genre != "" {
 		fmt.Fprintf(&b, "?item wdt:P136 %s. ", qref(w.genre))
 	}
-	fmt.Fprintf(&b, "} ORDER BY DESC(?links) LIMIT %d", w.limit)
+	fmt.Fprintf(&b, "} LIMIT %d", w.limit)
 	return b.String()
 }
 
