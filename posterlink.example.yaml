@@ -56,3 +56,17 @@ providers:
     orientation: any # any | portrait
     # artists: [Claude Monet, Vincent van Gogh, Georges Seurat]  # default: a curated famous set
     # query: painting   # used only when artists is empty
+
+  # Famous paintings from Wikidata + Wikimedia Commons (no API key). Ranked by
+  # fame (number of Wikipedia languages linking to the work). Personal/private
+  # display only — images are not license-filtered. Disabled by default.
+  wikidata:
+    enabled: false
+    weight: 0.3
+    min_sitelinks: 20 # fame threshold; higher = fewer, more iconic
+    width: 1080 # 0 = original full resolution
+    limit: 500
+    # collection: Q19675  # optional: Louvre only (Met Q160236, Uffizi Q51252, ...)
+    # movement: Q40415    # optional: e.g. Impressionism
+    # creator: Q5582      # optional: e.g. Van Gogh
+    # genre: Q134307      # optional: e.g. portrait
