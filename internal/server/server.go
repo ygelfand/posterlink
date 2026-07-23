@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -106,16 +107,38 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// handlePoster 302-redirects to a random image, ignoring query params (the
-// wallpanel cache-buster is noise to us).
+// handlePoster 302-redirects to a random image. An optional comma-delimited
+// ?providers= filter restricts the pick to those (enabled) providers; other
+// query params (e.g. the wallpanel cache-buster) are ignored.
 func (s *Server) handlePoster(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	url, ok := s.pool.Random()
+
+	allow := parseProviders(r.URL.Query().Get("providers"))
+	url, ok := s.pool.RandomFrom(allow)
 	if !ok {
-		http.Error(w, "warming up", http.StatusServiceUnavailable)
+		if s.pool.Size() == 0 {
+			http.Error(w, "warming up", http.StatusServiceUnavailable)
+		} else {
+			http.Error(w, "no images for requested providers", http.StatusNotFound)
+		}
 		return
 	}
 	http.Redirect(w, r, url, http.StatusFound)
+}
+
+// parseProviders splits a comma-delimited providers value into a set. Only
+// providers present in the pool (i.e. enabled) will actually match.
+func parseProviders(raw string) map[string]struct{} {
+	if raw == "" {
+		return nil
+	}
+	set := make(map[string]struct{})
+	for name := range strings.SplitSeq(raw, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			set[name] = struct{}{}
+		}
+	}
+	return set
 }
 
 // handleHealthz reports readiness and pool composition.

@@ -28,7 +28,10 @@ the last-good pool is kept so the screen never goes blank.
 | `GET`  | `/poster`   | `302` → random image; `Cache-Control: no-store`; `503` while warming |
 | `GET`  | `/healthz`  | JSON `{status, size, sources}` (`503` until the first pool lands)     |
 
-Query params are ignored (the wallpanel `?ts=` cache-buster is just noise).
+Optional `?providers=` (comma-delimited) restricts `/poster` to specific enabled
+providers, e.g. `/poster?providers=wikidata` or `/poster?providers=tmdb,steam`.
+Requesting only disabled/unknown providers returns `404`. Other query params
+(like the wallpanel `?ts=` cache-buster) are ignored.
 
 ## Configuration
 

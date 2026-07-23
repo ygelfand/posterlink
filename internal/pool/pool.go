@@ -2,11 +2,15 @@
 // per request. Selection is weighted across providers, then uniform within the
 // chosen provider, so blending (e.g. "80% posters, 20% photos") is a matter of
 // relative weights rather than pool sizes.
+//
+// The pool is only ever replaced wholesale (never mutated in place), so reads
+// are lock-free: they load an immutable snapshot via an atomic pointer while a
+// refresh publishes a new one.
 package pool
 
 import (
 	"math/rand/v2"
-	"sync"
+	"sync/atomic"
 )
 
 // Source is one provider's contribution to the pool.
@@ -16,16 +20,23 @@ type Source struct {
 	URLs   []string
 }
 
-// Pool is a concurrency-safe, weighted collection of image URLs.
-type Pool struct {
-	mu      sync.RWMutex
+// snapshot is an immutable view of the pool; it is replaced, never edited.
+type snapshot struct {
 	sources []Source
 	total   float64
-	last    string // last served URL, to avoid immediate repeats
+}
+
+// Pool is a lock-free, weighted collection of image URLs.
+type Pool struct {
+	cur atomic.Pointer[snapshot]
 }
 
 // New returns an empty pool.
-func New() *Pool { return &Pool{} }
+func New() *Pool {
+	p := &Pool{}
+	p.cur.Store(&snapshot{})
+	return p
+}
 
 // Set replaces the pool contents. Sources with no URLs or non-positive weight
 // are dropped. Set is a no-op if it would leave the pool empty, preserving the
@@ -43,79 +54,78 @@ func (p *Pool) Set(sources []Source) {
 	if len(kept) == 0 {
 		return
 	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.sources = kept
-	p.total = total
+	p.cur.Store(&snapshot{sources: kept, total: total})
 }
 
-// Random returns a weighted-random URL. It re-rolls once to avoid serving the
-// same URL twice in a row when the pool has more than one entry. The boolean is
-// false only when the pool is empty.
-func (p *Pool) Random() (string, bool) {
-	p.mu.RLock()
-	url, ok := p.pick()
-	p.mu.RUnlock()
-	if !ok {
+// Random returns a weighted-random URL across all sources.
+func (p *Pool) Random() (string, bool) { return p.pick(nil) }
+
+// RandomFrom returns a weighted-random URL restricted to the named sources. An
+// empty set behaves like Random (all sources). The boolean is false when no
+// matching source has any URLs.
+func (p *Pool) RandomFrom(allow map[string]struct{}) (string, bool) {
+	if len(allow) == 0 {
+		allow = nil
+	}
+	return p.pick(allow)
+}
+
+// pick selects a weighted-random URL from the current snapshot, restricted to
+// allow (nil = all sources).
+func (p *Pool) pick(allow map[string]struct{}) (string, bool) {
+	s := p.cur.Load()
+
+	total := s.total
+	if allow != nil {
+		total = 0
+		for _, src := range s.sources {
+			if _, ok := allow[src.Name]; ok {
+				total += src.Weight
+			}
+		}
+	}
+	if total <= 0 {
 		return "", false
 	}
 
-	if url == p.lastServed() && p.Size() > 1 {
-		p.mu.RLock()
-		if reroll, ok := p.pick(); ok {
-			url = reroll
+	r := rand.Float64() * total
+	var last *Source
+	for i := range s.sources {
+		src := &s.sources[i]
+		if allow != nil {
+			if _, ok := allow[src.Name]; !ok {
+				continue
+			}
 		}
-		p.mu.RUnlock()
-	}
-
-	p.mu.Lock()
-	p.last = url
-	p.mu.Unlock()
-	return url, true
-}
-
-// pick selects a URL under an already-held read lock.
-func (p *Pool) pick() (string, bool) {
-	if p.total <= 0 {
-		return "", false
-	}
-	r := rand.Float64() * p.total
-	for _, s := range p.sources {
-		if r < s.Weight {
-			return s.URLs[rand.IntN(len(s.URLs))], true
+		last = src
+		if r < src.Weight {
+			return src.URLs[rand.IntN(len(src.URLs))], true
 		}
-		r -= s.Weight
+		r -= src.Weight
 	}
-	// Floating-point remainder: fall back to the last source.
-	last := p.sources[len(p.sources)-1]
-	return last.URLs[rand.IntN(len(last.URLs))], true
-}
-
-func (p *Pool) lastServed() string {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.last
+	// Floating-point remainder: fall back to the last eligible source.
+	if last != nil {
+		return last.URLs[rand.IntN(len(last.URLs))], true
+	}
+	return "", false
 }
 
 // Size returns the total number of URLs across all sources.
 func (p *Pool) Size() int {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	s := p.cur.Load()
 	n := 0
-	for _, s := range p.sources {
-		n += len(s.URLs)
+	for _, src := range s.sources {
+		n += len(src.URLs)
 	}
 	return n
 }
 
 // Stats returns a per-source URL count, for the health endpoint.
 func (p *Pool) Stats() map[string]int {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	out := make(map[string]int, len(p.sources))
-	for _, s := range p.sources {
-		out[s.Name] = len(s.URLs)
+	s := p.cur.Load()
+	out := make(map[string]int, len(s.sources))
+	for _, src := range s.sources {
+		out[src.Name] = len(src.URLs)
 	}
 	return out
 }
