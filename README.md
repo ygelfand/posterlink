@@ -86,6 +86,9 @@ Adding one is a single file under `internal/provider/<name>/` that calls
 - **`artic`** — famous paintings from the Art Institute of Chicago (no API key).
   Uses IIIF to crop server-side: `fit: fill` full-bleed-crops to your screen
   `aspect`; `fit: fit` letterboxes the whole work. Curated by `artists`.
+- **`itunes`** — album covers (or book covers, etc.) from the iTunes Search API
+  (no API key). Curated by `artist_ids` (exact via lookup) or `artists` (search
+  + exact-name filter); generic over `media`/`entity`/`attribute`. Square art.
 
 ## Running
 

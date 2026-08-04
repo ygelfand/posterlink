@@ -57,6 +57,22 @@ providers:
     # artists: [Claude Monet, Vincent van Gogh, Georges Seurat]  # default: a curated famous set
     # query: painting   # used only when artists is empty
 
+  # Album covers (or book covers, etc.) from the iTunes Search API (no API key).
+  # Square covers, so they letterbox on a portrait wall. Disabled by default.
+  itunes:
+    enabled: false
+    weight: 0.3
+    size: 2000 # cover px (upscaled from the source master)
+    # Prefer artist_ids (lookup = exact artist, full catalog). Find an id via
+    # the music.apple.com/artist/.../<id> URL, or a one-off search.
+    artist_ids: ["3864756"] # MF DOOM
+    # artists: [Radiohead, Miles Davis]   # search + exact-name filter (strict)
+    # For books instead of music:
+    #   media: ebook
+    #   entity: ebook
+    #   attribute: authorTerm
+    #   artists: [Stephen King, Neil Gaiman]
+
   # Famous paintings from Wikidata + Wikimedia Commons (no API key). Ranked by
   # fame (number of Wikipedia languages linking to the work). Personal/private
   # display only — images are not license-filtered. Disabled by default.
