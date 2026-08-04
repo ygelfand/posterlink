@@ -55,14 +55,14 @@ type Steam struct {
 }
 
 // New constructs a Steam provider from its configuration subtree.
-func New(opts provider.Options) (provider.Provider, error) {
+func New(name string, opts provider.Options) (provider.Provider, error) {
 	size := opts.String("size", "2x")
 	file, ok := sizeFiles[size]
 	if !ok {
 		return nil, fmt.Errorf("steam: invalid size %q (want 1x or 2x)", size)
 	}
 	return &Steam{
-		Base:     provider.NewBase("steam", opts),
+		Base:     provider.NewBase(name, opts),
 		file:     file,
 		sources:  opts.Strings("sources", []string{"most_played", "top_sellers"}),
 		cc:       opts.String("cc", "us"),

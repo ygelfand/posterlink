@@ -51,7 +51,7 @@ type ArtIC struct {
 }
 
 // New constructs an Art Institute provider from its configuration subtree.
-func New(opts provider.Options) (provider.Provider, error) {
+func New(name string, opts provider.Options) (provider.Provider, error) {
 	aw, ah, err := parseAspect(opts.String("aspect", "9:16"))
 	if err != nil {
 		return nil, err
@@ -61,7 +61,7 @@ func New(opts provider.Options) (provider.Provider, error) {
 		return nil, fmt.Errorf("artic: invalid fit %q (want fill or fit)", mode)
 	}
 	return &ArtIC{
-		Base:     provider.NewBase("artic", opts),
+		Base:     provider.NewBase(name, opts),
 		width:    opts.Int("width", 1080),
 		fill:     mode == "fill",
 		aspectW:  aw,

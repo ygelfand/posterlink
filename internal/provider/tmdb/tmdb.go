@@ -51,7 +51,7 @@ type TMDB struct {
 }
 
 // New constructs a TMDB provider from its configuration subtree.
-func New(opts provider.Options) (provider.Provider, error) {
+func New(name string, opts provider.Options) (provider.Provider, error) {
 	apiKey := opts.String("api_key", "")
 	token := opts.String("access_token", "")
 	if apiKey == "" && token == "" {
@@ -59,7 +59,7 @@ func New(opts provider.Options) (provider.Provider, error) {
 	}
 
 	return &TMDB{
-		Base:        provider.NewBase("tmdb", opts),
+		Base:        provider.NewBase(name, opts),
 		apiKey:      apiKey,
 		accessToken: token,
 		apiBase:     strings.TrimRight(opts.String("api_base", defaultAPIBase), "/") + "/",

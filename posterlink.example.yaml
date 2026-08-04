@@ -73,6 +73,19 @@ providers:
     #   attribute: authorTerm
     #   artists: [Stephen King, Neil Gaiman]
 
+  # Aliasing: a block key is the instance name; set "type:" to reuse a provider
+  # with a separate config. Aliased instances are distinct pool sources — their
+  # own weight, filterable via /poster?providers=<name>, listed in /healthz.
+  # (Without "type:", the block key IS the type, e.g. the "itunes:" block above.)
+  # itunes_jazz:
+  #   type: itunes
+  #   weight: 0.2
+  #   artist_ids: ["44984", "462006"]   # Miles Davis, John Coltrane
+  # itunes_hiphop:
+  #   type: itunes
+  #   weight: 0.2
+  #   artist_ids: ["3864756"]            # MF DOOM
+
   # Famous paintings from Wikidata + Wikimedia Commons (no API key). Ranked by
   # fame (number of Wikipedia languages linking to the work). Personal/private
   # display only — images are not license-filtered. Disabled by default.

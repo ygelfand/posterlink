@@ -53,14 +53,14 @@ type ITunes struct {
 }
 
 // New constructs an iTunes provider from its configuration subtree.
-func New(opts provider.Options) (provider.Provider, error) {
+func New(name string, opts provider.Options) (provider.Provider, error) {
 	ids := opts.Strings("artist_ids", nil)
 	names := opts.Strings("artists", nil)
 	if len(ids) == 0 && len(names) == 0 {
 		return nil, fmt.Errorf("itunes: at least one of artist_ids or artists is required")
 	}
 	return &ITunes{
-		Base:      provider.NewBase("itunes", opts),
+		Base:      provider.NewBase(name, opts),
 		size:      opts.Int("size", 2000),
 		media:     opts.String("media", "music"),
 		entity:    opts.String("entity", "album"),

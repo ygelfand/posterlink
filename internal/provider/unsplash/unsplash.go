@@ -46,7 +46,7 @@ type Unsplash struct {
 }
 
 // New constructs an Unsplash provider from its configuration subtree.
-func New(opts provider.Options) (provider.Provider, error) {
+func New(name string, opts provider.Options) (provider.Provider, error) {
 	// Unsplash's dashboard labels this the "Access Key"; it is sent as the
 	// Client-ID. Accept either name.
 	key := opts.String("access_key", "")
@@ -57,7 +57,7 @@ func New(opts provider.Options) (provider.Provider, error) {
 		return nil, fmt.Errorf("unsplash: access_key (client_id) is required (register an app at unsplash.com/developers)")
 	}
 	return &Unsplash{
-		Base:        provider.NewBase("unsplash", opts),
+		Base:        provider.NewBase(name, opts),
 		accessKey:   key,
 		apiBase:     opts.String("api_base", defaultAPIBase),
 		count:       opts.Int("count", defaultCount),

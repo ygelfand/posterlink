@@ -46,9 +46,9 @@ type Wikidata struct {
 }
 
 // New constructs a Wikidata provider from its configuration subtree.
-func New(opts provider.Options) (provider.Provider, error) {
+func New(name string, opts provider.Options) (provider.Provider, error) {
 	return &Wikidata{
-		Base:         provider.NewBase("wikidata", opts),
+		Base:         provider.NewBase(name, opts),
 		minSitelinks: opts.Int("min_sitelinks", 20),
 		width:        opts.Int("width", 1080),
 		limit:        opts.Int("limit", 500),

@@ -53,7 +53,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	providers := make([]provider.Provider, 0, len(names))
 	for _, name := range names {
-		p, err := provider.Build(name, cfg.ProviderOptions(name))
+		p, err := buildProvider(cfg, name)
 		if err != nil {
 			return fmt.Errorf("provider %q: %w", name, err)
 		}
