@@ -26,6 +26,19 @@ type Config struct {
 
 	Port            int
 	RefreshInterval time.Duration
+	Cache           CacheConfig
+}
+
+// CacheConfig holds the settings for the local image mirror (posterlink sync).
+type CacheConfig struct {
+	// Dir is the cache root; each provider gets a subdirectory of it.
+	Dir string
+	// Concurrency is the number of parallel image downloads.
+	Concurrency int
+	// Metadata enables EXIF/XMP tagging of cached images.
+	Metadata bool
+	// UserAgent is sent with every image download.
+	UserAgent string
 }
 
 // Load resolves configuration from the given file (optional), the standard
@@ -55,6 +68,11 @@ func Load(cfgFile string) (*Config, error) {
 
 	v.SetDefault("port", 8088)
 	v.SetDefault("refresh_interval", "30m")
+	v.SetDefault("cache.concurrency", 4)
+	v.SetDefault("cache.metadata", true)
+	// Deliberately without a contact URL: some image CDNs (artic.edu, for one)
+	// have a WAF that 403s any user agent containing one.
+	v.SetDefault("cache.user_agent", "posterlink/"+Version)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -71,6 +89,12 @@ func Load(cfgFile string) (*Config, error) {
 		v:               v,
 		Port:            v.GetInt("port"),
 		RefreshInterval: interval,
+		Cache: CacheConfig{
+			Dir:         v.GetString("cache.dir"),
+			Concurrency: v.GetInt("cache.concurrency"),
+			Metadata:    v.GetBool("cache.metadata"),
+			UserAgent:   v.GetString("cache.user_agent"),
+		},
 	}, nil
 }
 

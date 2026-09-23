@@ -28,6 +28,10 @@ serve: ## Run the server against ./posterlink.yaml
 preview: ## Open an HTML contact sheet of the configured providers/lists
 	go run . preview --config posterlink.yaml
 
+.PHONY: sync
+sync: ## Mirror the configured providers' images to disk (cache.dir)
+	go run . sync --config posterlink.yaml -v
+
 .PHONY: test
 test: ## Run tests
 	go test -v ./...

@@ -3,3 +3,4 @@
 posterlink.yaml
 !posterlink.example.yaml
 *.out
+/cache/

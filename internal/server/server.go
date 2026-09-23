@@ -112,6 +112,7 @@ func (s *Server) Handler() http.Handler {
 // query params (e.g. the wallpanel cache-buster) are ignored.
 func (s *Server) handlePoster(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	allow := parseProviders(r.URL.Query().Get("providers"))
 	url, ok := s.pool.RandomFrom(allow)

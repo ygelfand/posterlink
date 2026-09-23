@@ -75,14 +75,7 @@ func runPreview(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("provider %q: %w", name, err)
 		}
 
-		var groups []provider.Group
-		if pv, ok := p.(provider.Previewer); ok {
-			groups, err = pv.Preview(ctx)
-		} else {
-			var urls []string
-			urls, err = p.Fetch(ctx)
-			groups = []provider.Group{{Label: name, URLs: urls}}
-		}
+		groups, err := providerGroups(ctx, p)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %s: %v\n", name, err)
 			continue

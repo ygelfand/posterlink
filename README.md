@@ -21,6 +21,10 @@ The pool is **in memory only**. It is filled at startup and rebuilt every
 `refresh_interval` (default 30m); nothing is written to disk. If a refresh fails,
 the last-good pool is kept so the screen never goes blank.
 
+If you would rather have the images *on disk* — to feed a photo library such as
+[Immich](https://immich.app) — `posterlink sync` mirrors them locally with EXIF
+metadata attached. See [Local mirror](#local-mirror-posterlink-sync).
+
 ## Endpoints
 
 | Method | Path        | Behavior                                                             |
@@ -90,10 +94,98 @@ Adding one is a single file under `internal/provider/<name>/` that calls
   (no API key). Curated by `artist_ids` (exact via lookup) or `artists` (search
   + exact-name filter); generic over `media`/`entity`/`attribute`. Square art.
 
+## Local mirror (`posterlink sync`)
+
+`posterlink sync` downloads what the providers currently return into a local
+directory, **one subdirectory per provider config block**, and tags every image
+with EXIF and XMP metadata so a photo library indexes it properly:
+
+```
+/srv/immich/posters/
+├── tmdb/
+│   ├── .posterlink.json          # manifest: source URL of every file
+│   ├── 1pdfLvkbY9ohJlCjQH2CZjjYVvJ-6f3a1c9d21.jpg
+│   └── ...
+├── itunes_jazz/
+│   └── kind-of-blue-0b77e1ca04.jpg
+└── wikidata/
+    └── mona-lisa-by-leonardo-3c91af7e02.jpg
+```
+
+```sh
+posterlink sync                       # mirror per the config
+posterlink sync --dry-run             # show what would change
+posterlink sync --provider tmdb -v    # one provider; others left untouched
+```
+
+### Idempotent and incremental
+
+Runs are cheap to repeat, which is what makes this safe from cron. Each
+directory keeps a `.posterlink.json` manifest keyed by a hash of the source URL,
+and filenames are derived from that URL, so a sync:
+
+- **skips** every image already on disk — no request is made for it at all
+  (posters are assumed immutable, so they are never re-downloaded);
+- **downloads** only URLs that are new since the last run;
+- **deletes** images the providers no longer return, including whole
+  directories for providers you removed from the config or set
+  `cache_enabled: false` on;
+- **leaves alone** anything it did not download itself. Only files recorded in
+  a manifest are ever deleted, so the cache root can be shared with your own
+  photos.
+
+A provider whose API fails is **skipped, not pruned** — a transient outage never
+wipes a working cache. `sync` exits non-zero in that case (and prints a
+per-provider table), so cron can tell you about it.
+
+### Metadata
+
+Each image gets EXIF (a JPEG APP1 segment or a PNG `eXIf` chunk) and an XMP
+packet; formats that cannot carry either get an `<image>.xmp` sidecar. No
+`exiftool` needed.
+
+| Field                                | Value                                          |
+| ------------------------------------ | ---------------------------------------------- |
+| `Make` / `Model`                     | `posterlink` / the provider name               |
+| `ImageDescription`, `dc:description` | provider and list, e.g. `tmdb / movie/popular` |
+| `DateTimeOriginal`, `xmp:CreateDate` | when the image was downloaded                  |
+| `UserComment`, `dc:source`           | the source URL                                  |
+| `dc:subject` (keywords)              | `posterlink`, the provider, the list            |
+
+In Immich the make/model pair is searchable like a camera, so `posterlink` +
+`tmdb` isolates exactly those images — handy for a smart album feeding a photo
+frame. Point an [external
+library](https://immich.app/docs/guides/external-library) at the cache root and
+scan it after each sync.
+
+### Config
+
+```yaml
+cache:
+  dir: /srv/immich/posters # cache root (or pass --dir)
+  concurrency: 4           # parallel downloads
+  metadata: true           # embed EXIF/XMP
+  # user_agent: posterlink/1.0   # some CDNs 403 a UA containing a URL
+
+providers:
+  tmdb:
+    # ... provider settings as usual, plus:
+    cache_limit: 500       # cap images kept for this provider (0 = all)
+    cache_enabled: true    # false: never mirror this one (and prune its dir)
+    cache_dir: posters     # subdirectory name (default: the block key)
+```
+
+From cron, hourly:
+
+```cron
+17 * * * * /usr/local/bin/posterlink sync --config /etc/posterlink/posterlink.yaml
+```
+
 ## Running
 
 ```sh
 make serve                              # uses ./posterlink.yaml
+make sync                               # mirror to disk per ./posterlink.yaml
 go run . serve --port 8088 -v           # env-driven
 docker run -e TMDB_API_KEY=xxx -p 8088:8088 ghcr.io/ygelfand/posterlink:latest
 ```

@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+
 	"github.com/ygelfand/posterlink/internal/config"
 	"github.com/ygelfand/posterlink/internal/provider"
 
@@ -21,4 +23,28 @@ func buildProvider(cfg *config.Config, name string) (provider.Provider, error) {
 	opts := cfg.ProviderOptions(name)
 	typ := opts.String("type", name)
 	return provider.Build(typ, name, opts)
+}
+
+// providerGroups returns a provider's images as labeled groups: one group per
+// list/query for providers that implement provider.Previewer, otherwise a
+// single group named after the provider. Both `preview` and `sync` use the
+// labels to show (and record) where each image came from.
+func providerGroups(ctx context.Context, p provider.Provider) ([]provider.Group, error) {
+	if pv, ok := p.(provider.Previewer); ok {
+		return pv.Preview(ctx)
+	}
+	urls, err := p.Fetch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return []provider.Group{{Label: p.Name(), URLs: urls}}, nil
+}
+
+// countURLs totals the images across groups.
+func countURLs(groups []provider.Group) int {
+	n := 0
+	for _, g := range groups {
+		n += len(g.URLs)
+	}
+	return n
 }

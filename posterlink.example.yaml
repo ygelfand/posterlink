@@ -7,6 +7,16 @@
 port: 8088
 refresh_interval: 30m
 
+# Settings for `posterlink sync`, which mirrors the providers' images to disk
+# (one subdirectory per provider block below) with EXIF/XMP metadata attached,
+# so a photo library such as Immich can index them. Unused by `serve`.
+cache:
+  dir: "" # cache root, e.g. /srv/immich/posters; or pass --dir
+  concurrency: 4 # parallel downloads
+  metadata: true # embed EXIF/XMP describing the provider and source URL
+  # Some image CDNs (artic.edu) reject a user agent containing a URL.
+  # user_agent: posterlink/1.0
+
 providers:
   tmdb:
     enabled: true
@@ -16,6 +26,10 @@ providers:
     # access_token: ""
     size: w780 # w92 w154 w185 w342 w500 w780 original
     pages: 3
+    # Any provider block also takes these `posterlink sync` settings:
+    #   cache_enabled: true   # false = never mirror it (and prune its directory)
+    #   cache_limit: 500      # cap the images kept on disk; 0 = all of them
+    #   cache_dir: posters    # subdirectory name (default: this block's key)
     lists:
       - trending/movie/week
       - movie/popular
