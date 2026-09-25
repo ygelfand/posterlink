@@ -19,7 +19,6 @@ import (
 	"github.com/ygelfand/posterlink/internal/provider"
 )
 
-// imageServer serves a distinct JPEG per path and counts requests.
 type imageServer struct {
 	*httptest.Server
 	hits atomic.Int64
@@ -50,10 +49,15 @@ func newImageServer(t *testing.T) *imageServer {
 	return s
 }
 
-func (s *imageServer) urls(names ...string) []string {
-	out := make([]string, 0, len(names))
+func (s *imageServer) images(names ...string) []provider.Image {
+	out := make([]provider.Image, 0, len(names))
 	for _, n := range names {
-		out = append(out, s.URL+"/posters/"+n)
+		out = append(out, provider.Image{
+			URL:     s.URL + "/posters/" + n,
+			Title:   strings.TrimSuffix(n, filepath.Ext(n)),
+			Creator: "Denis Villeneuve",
+			Date:    "2024-03-01",
+		})
 	}
 	return out
 }
@@ -62,11 +66,10 @@ func testOptions(dir string) Options {
 	return Options{Dir: dir, Concurrency: 4, Metadata: true, Prune: true}
 }
 
-func source(name string, urls []string) []Source {
-	return []Source{{Name: name, Groups: []provider.Group{{Label: "list/one", URLs: urls}}}}
+func source(name string, images []provider.Image) []Source {
+	return []Source{{Name: name, Groups: []provider.Group{{Label: "list/one", Images: images}}}}
 }
 
-// imageFiles lists the non-manifest files in a provider directory.
 func imageFiles(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -89,7 +92,7 @@ func TestSyncDownloadsIntoPerProviderDirs(t *testing.T) {
 	root := t.TempDir()
 
 	results, err := Sync(context.Background(), testOptions(root),
-		source("tmdb", srv.urls("dune.jpg", "arrival.jpg", "sicario.jpg")))
+		source("tmdb", srv.images("dune.jpg", "arrival.jpg", "sicario.jpg")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,20 +112,27 @@ func TestSyncDownloadsIntoPerProviderDirs(t *testing.T) {
 	if len(files) != 3 {
 		t.Fatalf("got files %v, want 3", files)
 	}
-	// Names are readable and hash-suffixed.
 	if !slices.ContainsFunc(files, func(n string) bool { return strings.HasPrefix(n, "dune-") && strings.HasSuffix(n, ".jpg") }) {
 		t.Errorf("no readable filename for dune.jpg: %v", files)
 	}
 
-	// Metadata made it into the file.
-	data, err := os.ReadFile(filepath.Join(dir, files[0]))
+	var dune string
+	for _, f := range files {
+		if strings.HasPrefix(f, "dune-") {
+			dune = f
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, dune))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"posterlink", "tmdb", "list/one"} {
+	for _, want := range []string{"dune", "Denis Villeneuve", "2024", "posters/dune.jpg"} {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Errorf("cached image is missing metadata %q", want)
 		}
+	}
+	if bytes.Contains(data, []byte("Model")) {
+		t.Error("the make/model pair is still being written")
 	}
 
 	m := loadManifest(dir)
@@ -139,7 +149,7 @@ func TestSyncDownloadsIntoPerProviderDirs(t *testing.T) {
 func TestSyncIsIdempotent(t *testing.T) {
 	srv := newImageServer(t)
 	root := t.TempDir()
-	urls := srv.urls("dune.jpg", "arrival.jpg")
+	urls := srv.images("dune.jpg", "arrival.jpg")
 
 	if _, err := Sync(context.Background(), testOptions(root), source("tmdb", urls)); err != nil {
 		t.Fatal(err)
@@ -168,13 +178,12 @@ func TestSyncAddsAndPrunes(t *testing.T) {
 	dir := filepath.Join(root, "tmdb")
 
 	if _, err := Sync(context.Background(), testOptions(root),
-		source("tmdb", srv.urls("dune.jpg", "arrival.jpg"))); err != nil {
+		source("tmdb", srv.images("dune.jpg", "arrival.jpg"))); err != nil {
 		t.Fatal(err)
 	}
 
-	// arrival.jpg is gone from the provider; blade-runner.jpg is new.
 	results, err := Sync(context.Background(), testOptions(root),
-		source("tmdb", srv.urls("dune.jpg", "blade-runner.jpg")))
+		source("tmdb", srv.images("dune.jpg", "blade-runner.jpg")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,13 +210,13 @@ func TestSyncNoPruneKeepsRemovedImages(t *testing.T) {
 	root := t.TempDir()
 
 	if _, err := Sync(context.Background(), testOptions(root),
-		source("tmdb", srv.urls("dune.jpg", "arrival.jpg"))); err != nil {
+		source("tmdb", srv.images("dune.jpg", "arrival.jpg"))); err != nil {
 		t.Fatal(err)
 	}
 
 	opts := testOptions(root)
 	opts.Prune = false
-	results, err := Sync(context.Background(), opts, source("tmdb", srv.urls("dune.jpg")))
+	results, err := Sync(context.Background(), opts, source("tmdb", srv.images("dune.jpg")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +240,7 @@ func TestSyncLeavesForeignDirectoriesAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	results, err := Sync(context.Background(), testOptions(root), source("tmdb", srv.urls("dune.jpg")))
+	results, err := Sync(context.Background(), testOptions(root), source("tmdb", srv.images("dune.jpg")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,9 +251,7 @@ func TestSyncLeavesForeignDirectoriesAlone(t *testing.T) {
 		t.Fatal("posterlink deleted a file it did not create")
 	}
 
-	// A second run, now with a manifest in place, must still not touch the
-	// pre-existing file: posterlink only deletes what it downloaded itself.
-	if _, err := Sync(context.Background(), testOptions(root), source("tmdb", srv.urls("dune.jpg"))); err != nil {
+	if _, err := Sync(context.Background(), testOptions(root), source("tmdb", srv.images("dune.jpg"))); err != nil {
 		t.Fatal(err)
 	}
 	if !fileExists(mine) {
@@ -257,19 +264,17 @@ func TestSyncPrunesStaleProviderDirs(t *testing.T) {
 	root := t.TempDir()
 
 	sources := []Source{
-		{Name: "tmdb", Groups: []provider.Group{{Label: "l", URLs: srv.urls("dune.jpg")}}},
-		{Name: "itunes_jazz", Groups: []provider.Group{{Label: "l", URLs: srv.urls("kind-of-blue.jpg")}}},
+		{Name: "tmdb", Groups: []provider.Group{{Label: "l", Images: srv.images("dune.jpg")}}},
+		{Name: "itunes_jazz", Groups: []provider.Group{{Label: "l", Images: srv.images("kind-of-blue.jpg")}}},
 	}
 	if _, err := Sync(context.Background(), testOptions(root), sources); err != nil {
 		t.Fatal(err)
 	}
-	// A directory posterlink did not create must survive.
 	foreign := filepath.Join(root, "family-photos")
 	if err := os.MkdirAll(foreign, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	// itunes_jazz is dropped from the config.
 	if _, err := Sync(context.Background(), testOptions(root), sources[:1]); err != nil {
 		t.Fatal(err)
 	}
@@ -289,14 +294,13 @@ func TestSyncKeepDirsProtectsFailedProviders(t *testing.T) {
 	root := t.TempDir()
 
 	sources := []Source{
-		{Name: "tmdb", Groups: []provider.Group{{Label: "l", URLs: srv.urls("dune.jpg")}}},
-		{Name: "steam", Groups: []provider.Group{{Label: "l", URLs: srv.urls("hades.jpg")}}},
+		{Name: "tmdb", Groups: []provider.Group{{Label: "l", Images: srv.images("dune.jpg")}}},
+		{Name: "steam", Groups: []provider.Group{{Label: "l", Images: srv.images("hades.jpg")}}},
 	}
 	if _, err := Sync(context.Background(), testOptions(root), sources); err != nil {
 		t.Fatal(err)
 	}
 
-	// steam's API is down this run: it is not in sources, but is protected.
 	opts := testOptions(root)
 	opts.KeepDirs = []string{"steam"}
 	if _, err := Sync(context.Background(), opts, sources[:1]); err != nil {
@@ -312,7 +316,7 @@ func TestSyncSkipsNonImagesAndErrors(t *testing.T) {
 	root := t.TempDir()
 
 	results, err := Sync(context.Background(), testOptions(root),
-		source("tmdb", srv.urls("dune.jpg", "error-page.html", "gone.missing")))
+		source("tmdb", srv.images("dune.jpg", "error-page.html", "gone.missing")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +333,7 @@ func TestSyncLimit(t *testing.T) {
 	srv := newImageServer(t)
 	root := t.TempDir()
 
-	sources := source("tmdb", srv.urls("a.jpg", "b.jpg", "c.jpg", "d.jpg"))
+	sources := source("tmdb", srv.images("a.jpg", "b.jpg", "c.jpg", "d.jpg"))
 	sources[0].Limit = 2
 	results, err := Sync(context.Background(), testOptions(root), sources)
 	if err != nil {
@@ -346,7 +350,7 @@ func TestSyncDryRunWritesNothing(t *testing.T) {
 
 	opts := testOptions(root)
 	opts.DryRun = true
-	results, err := Sync(context.Background(), opts, source("tmdb", srv.urls("dune.jpg", "arrival.jpg")))
+	results, err := Sync(context.Background(), opts, source("tmdb", srv.images("dune.jpg", "arrival.jpg")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,10 +366,10 @@ func TestSyncDedupesAcrossGroups(t *testing.T) {
 	srv := newImageServer(t)
 	root := t.TempDir()
 
-	urls := srv.urls("dune.jpg")
+	urls := srv.images("dune.jpg")
 	sources := []Source{{Name: "tmdb", Groups: []provider.Group{
-		{Label: "movie/popular", URLs: urls},
-		{Label: "trending/movie/week", URLs: urls},
+		{Label: "movie/popular", Images: urls},
+		{Label: "trending/movie/week", Images: urls},
 	}}}
 	results, err := Sync(context.Background(), testOptions(root), sources)
 	if err != nil {
@@ -384,7 +388,7 @@ func TestSyncDedupesAcrossGroups(t *testing.T) {
 func TestSyncRecoversFromCorruptManifest(t *testing.T) {
 	srv := newImageServer(t)
 	root := t.TempDir()
-	urls := srv.urls("dune.jpg")
+	urls := srv.images("dune.jpg")
 
 	if _, err := Sync(context.Background(), testOptions(root), source("tmdb", urls)); err != nil {
 		t.Fatal(err)
@@ -398,8 +402,6 @@ func TestSyncRecoversFromCorruptManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The image is re-downloaded to the same deterministic name, and the
-	// orphaned copy is not left behind.
 	if r := results[0]; r.Added != 1 {
 		t.Fatalf("unexpected result: %+v", r)
 	}
@@ -424,7 +426,7 @@ func TestSyncSidecarForUnwritableFormat(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	results, err := Sync(context.Background(), testOptions(root), source("unsplash", []string{srv.URL + "/photo.webp"}))
+	results, err := Sync(context.Background(), testOptions(root), source("unsplash", []provider.Image{{URL: srv.URL + "/photo.webp", Title: "foggy pine forest", Creator: "Jane Doe"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,12 +452,11 @@ func TestSyncSidecarForUnwritableFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(data, []byte("unsplash")) {
-		t.Error("sidecar is missing the provider")
+	if !bytes.Contains(data, []byte("foggy pine forest - Jane Doe")) {
+		t.Errorf("sidecar is missing the caption:\n%s", data)
 	}
 
-	// The sidecar survives a no-op sync.
-	if _, err := Sync(context.Background(), testOptions(root), source("unsplash", []string{srv.URL + "/photo.webp"})); err != nil {
+	if _, err := Sync(context.Background(), testOptions(root), source("unsplash", []provider.Image{{URL: srv.URL + "/photo.webp", Title: "foggy pine forest", Creator: "Jane Doe"}})); err != nil {
 		t.Fatal(err)
 	}
 	if files := imageFiles(t, dir); len(files) != 2 {
@@ -466,8 +467,8 @@ func TestSyncSidecarForUnwritableFormat(t *testing.T) {
 func TestSyncRejectsCollidingProviderDirs(t *testing.T) {
 	root := t.TempDir()
 	sources := []Source{
-		{Name: "itunes", Dir: "music", Groups: []provider.Group{{URLs: []string{"http://x/a.jpg"}}}},
-		{Name: "itunes_jazz", Dir: "music", Groups: []provider.Group{{URLs: []string{"http://x/b.jpg"}}}},
+		{Name: "itunes", Dir: "music", Groups: []provider.Group{{Images: []provider.Image{{URL: "http://x/a.jpg"}}}}},
+		{Name: "itunes_jazz", Dir: "music", Groups: []provider.Group{{Images: []provider.Image{{URL: "http://x/b.jpg"}}}}},
 	}
 	_, err := Sync(context.Background(), testOptions(root), sources)
 	if err == nil {
@@ -496,8 +497,6 @@ func TestFileNameAndExt(t *testing.T) {
 		}
 	})
 
-	// One case per provider's URL shape: the descriptive segment is not always
-	// the last one.
 	for _, tc := range []struct {
 		name, url, provider, want string
 	}{

@@ -1,24 +1,4 @@
-// Package cache mirrors the configured providers' images onto the local
-// filesystem so a photo library (Immich, say) can index them, instead of
-// serving redirects to remote URLs.
-//
-// The layout is one directory per provider config block:
-//
-//	<dir>/tmdb/dune-part-two-6f3a1c9d21.jpg
-//	<dir>/tmdb/.posterlink.json
-//	<dir>/itunes_jazz/kind-of-blue-0b77e1ca04.jpg
-//
-// Each directory carries a manifest keyed by a hash of the source URL, so a
-// sync is idempotent and cheap: URLs already on disk are left untouched (no
-// request is made for them at all — posters are assumed immutable), URLs the
-// providers no longer return are deleted, and new ones are downloaded and
-// tagged with EXIF/XMP metadata.
-//
-// Deletion is deliberately narrow: only files the manifest records as
-// downloaded by posterlink are removed, and only directories holding such a
-// manifest. Anything else in the cache root — a directory of your own photos,
-// a file you dropped in next to the posters — is left alone, so the root can
-// be shared with other content.
+// Package cache mirrors the providers' images onto the local filesystem.
 package cache
 
 import (
@@ -46,57 +26,36 @@ import (
 )
 
 const (
-	// manifestName is the per-directory state file; it doubles as the marker
-	// that says "posterlink owns this directory and may delete from it".
 	manifestName    = ".posterlink.json"
 	manifestVersion = 1
 	tmpPrefix       = ".posterlink-tmp-"
 	sidecarExt      = ".xmp"
 
 	maxImageBytes = 64 << 20
-	hashLen       = 10 // hex characters of the URL hash kept in filenames
+	hashLen       = 10
 	slugLen       = 48
 )
 
-// Options controls a sync run.
 type Options struct {
-	// Dir is the cache root; provider directories are created beneath it.
-	Dir string
-	// Concurrency is the number of parallel downloads (default 4).
+	Dir         string
 	Concurrency int
-	// Metadata enables EXIF/XMP tagging of downloaded images.
-	Metadata bool
-	// Prune deletes cached files (and whole directories, for providers that
-	// are gone from the config) that the providers no longer return.
-	Prune bool
-	// KeepDirs names provider directories that must survive pruning even
-	// though they are not part of this run — e.g. a provider whose fetch just
-	// failed, or one excluded by --provider. Without this a transient API
-	// failure would look like "the provider has no images" and wipe its cache.
-	KeepDirs []string
-	// DryRun reports what would change without writing anything.
-	DryRun bool
-	// UserAgent is sent with every image request.
-	UserAgent string
-	// Timeout bounds a single image download (default 60s).
-	Timeout time.Duration
-	// Client, if set, is used for downloads (tests inject one).
-	Client *http.Client
-	// Log receives progress at debug level and problems at warn level.
-	Log *slog.Logger
+	Metadata    bool
+	Prune       bool
+	KeepDirs    []string
+	DryRun      bool
+	UserAgent   string
+	Timeout     time.Duration
+	Client      *http.Client
+	Log         *slog.Logger
 }
 
-// Source is one provider instance to mirror. Groups are the provider's labeled
-// URL sets (a single group for providers that are not provider.Previewer); the
-// label is recorded in each image's metadata.
 type Source struct {
 	Name   string
-	Dir    string // directory name; defaults to Name
+	Dir    string
 	Groups []provider.Group
-	Limit  int // cap on images kept for this provider; 0 means no cap
+	Limit  int
 }
 
-// Result summarizes what a sync did to one provider directory.
 type Result struct {
 	Name    string
 	Dir     string
@@ -108,18 +67,15 @@ type Result struct {
 	Err     error
 }
 
-// Total is the number of images in the directory after the sync.
 func (r Result) Total() int { return r.Kept + r.Added }
 
-// manifest is the on-disk state of one provider directory.
 type manifest struct {
 	Version  int             `json:"version"`
 	Provider string          `json:"provider"`
 	Updated  time.Time       `json:"updated"`
-	Items    map[string]item `json:"items"` // keyed by URL hash
+	Items    map[string]item `json:"items"`
 }
 
-// item is one cached image.
 type item struct {
 	URL        string    `json:"url"`
 	File       string    `json:"file"`
@@ -129,11 +85,11 @@ type item struct {
 	Downloaded time.Time `json:"downloaded"`
 }
 
-// desired is one URL a provider currently returns.
 type desired struct {
-	key   string // hash of url
+	key   string
 	url   string
 	label string
+	image provider.Image
 }
 
 type syncer struct {
@@ -142,9 +98,6 @@ type syncer struct {
 	log    *slog.Logger
 }
 
-// Sync mirrors every source into opts.Dir and returns one Result per source.
-// Per-provider problems are reported in the Result (and joined into the error)
-// rather than aborting the run, so one bad provider cannot stop the others.
 func Sync(ctx context.Context, opts Options, sources []Source) ([]Result, error) {
 	if strings.TrimSpace(opts.Dir) == "" {
 		return nil, errors.New("cache: no directory configured (set cache.dir or pass --dir)")
@@ -201,8 +154,6 @@ func Sync(ctx context.Context, opts Options, sources []Source) ([]Result, error)
 	return results, errors.Join(errs...)
 }
 
-// checkDirs rejects two sources that would share a directory: they would each
-// prune the other's images out of the one manifest they both write.
 func checkDirs(sources []Source) error {
 	seen := make(map[string]string, len(sources))
 	for _, src := range sources {
@@ -216,7 +167,6 @@ func checkDirs(sources []Source) error {
 	return nil
 }
 
-// dirName is the directory a source syncs into, before sanitizing.
 func dirName(src Source) string {
 	if src.Dir != "" {
 		return src.Dir
@@ -224,7 +174,6 @@ func dirName(src Source) string {
 	return src.Name
 }
 
-// syncSource brings one provider directory in line with src.
 func (s *syncer) syncSource(ctx context.Context, root string, src Source) Result {
 	dir := filepath.Join(root, sanitize(dirName(src)))
 	r := Result{Name: src.Name, Dir: dir}
@@ -245,7 +194,7 @@ func (s *syncer) syncSource(ctx context.Context, root string, src Source) Result
 	var todo []desired
 	for _, d := range flatten(src.Groups, src.Limit) {
 		if it, ok := old.Items[d.key]; ok && fileExists(filepath.Join(dir, it.File)) {
-			it.Label = d.label // labels can change without the image changing
+			it.Label = d.label
 			next.Items[d.key] = it
 			r.Kept++
 			continue
@@ -270,7 +219,6 @@ func (s *syncer) syncSource(ctx context.Context, root string, src Source) Result
 	return r
 }
 
-// ensureDir creates the provider's directory if it is missing.
 func (s *syncer) ensureDir(dir string) error {
 	info, err := os.Stat(dir)
 	switch {
@@ -287,20 +235,19 @@ func (s *syncer) ensureDir(dir string) error {
 	return nil
 }
 
-// flatten dedupes the groups' URLs (first label wins) and applies limit.
 func flatten(groups []provider.Group, limit int) []desired {
 	seen := make(map[string]struct{})
 	var out []desired
 	for _, g := range groups {
-		for _, u := range g.URLs {
-			if u == "" {
+		for _, img := range g.Images {
+			if img.URL == "" {
 				continue
 			}
-			if _, dup := seen[u]; dup {
+			if _, dup := seen[img.URL]; dup {
 				continue
 			}
-			seen[u] = struct{}{}
-			out = append(out, desired{key: hashURL(u), url: u, label: g.Label})
+			seen[img.URL] = struct{}{}
+			out = append(out, desired{key: hashURL(img.URL), url: img.URL, label: g.Label, image: img})
 			if limit > 0 && len(out) == limit {
 				return out
 			}
@@ -309,7 +256,6 @@ func flatten(groups []provider.Group, limit int) []desired {
 	return out
 }
 
-// download fetches todo with bounded concurrency, recording successes in next.
 func (s *syncer) download(ctx context.Context, dir string, todo []desired, next *manifest, r *Result) {
 	if len(todo) == 0 {
 		return
@@ -347,7 +293,6 @@ func (s *syncer) download(ctx context.Context, dir string, todo []desired, next 
 	wg.Wait()
 }
 
-// fetch downloads one image, tags it and writes it into dir atomically.
 func (s *syncer) fetch(ctx context.Context, dir string, d desired, providerName string) (item, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.opts.Timeout)
 	defer cancel()
@@ -406,7 +351,7 @@ func (s *syncer) fetch(ctx context.Context, dir string, d desired, providerName 
 		case ok:
 			out = tagged
 		default:
-			it.Sidecar = true // format we cannot write into
+			it.Sidecar = true
 		}
 	}
 
@@ -425,40 +370,20 @@ func (s *syncer) fetch(ctx context.Context, dir string, d desired, providerName 
 	return it, nil
 }
 
-// meta describes one image for the metadata writer. The provider goes in the
-// make/model pair so a photo library can filter by it like a camera, and the
-// group label (e.g. a TMDB list) becomes the description.
 func (s *syncer) meta(d desired, providerName string, now time.Time) exifwrite.Meta {
-	// Some providers already prefix their group labels with their own name
-	// (e.g. "itunes/id:3864756"); do not repeat it.
-	label := strings.TrimPrefix(d.label, providerName+"/")
-	desc := providerName
-	if label != "" && label != providerName {
-		desc = providerName + " / " + label
-	}
-	keywords := []string{"posterlink", providerName}
-	if label != "" && label != providerName {
-		keywords = append(keywords, label)
-	}
-	return exifwrite.Meta{
-		Title:       titleFrom(d.url),
-		Description: desc,
-		Make:        "posterlink",
-		Model:       providerName,
-		Software:    "posterlink",
+	m := exifwrite.Meta{
+		Description: d.image.Caption(),
+		Title:       d.image.Title,
 		Source:      d.url,
 		UniqueID:    d.key,
-		Keywords:    keywords,
 		Taken:       now,
 	}
+	if t, ok := d.image.Parsed(); ok {
+		m.Taken = t
+	}
+	return m
 }
 
-// pruneFiles deletes the images the providers no longer return. Only files a
-// previous sync recorded in the manifest are candidates, so nothing posterlink
-// did not download is ever removed. Leftover temp files (from an interrupted
-// run) are always cleaned up, and an image whose manifest entry was lost is
-// simply overwritten on the next download, since filenames are derived from
-// the source URL.
 func (s *syncer) pruneFiles(dir string, old, next manifest) (int, error) {
 	keep := map[string]bool{manifestName: true}
 	for _, it := range next.Items {
@@ -474,7 +399,7 @@ func (s *syncer) pruneFiles(dir string, old, next manifest) (int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil // dry run on a directory that does not exist yet
+			return 0, nil
 		}
 		return 0, err
 	}
@@ -507,8 +432,6 @@ func (s *syncer) pruneFiles(dir string, old, next manifest) (int, error) {
 	return removed, errors.Join(errs...)
 }
 
-// pruneDirs removes cache directories whose provider is no longer configured.
-// Only directories holding a posterlink manifest are ever removed.
 func (s *syncer) pruneDirs(root string, sources []Source) error {
 	keep := make(map[string]bool, len(sources)+len(s.opts.KeepDirs))
 	for _, src := range sources {
@@ -533,7 +456,7 @@ func (s *syncer) pruneDirs(root string, sources []Source) error {
 		}
 		dir := filepath.Join(root, e.Name())
 		if !fileExists(filepath.Join(dir, manifestName)) {
-			continue // not ours
+			continue
 		}
 		if s.opts.DryRun {
 			s.log.Info("would remove stale provider directory", "dir", dir)
@@ -548,21 +471,17 @@ func (s *syncer) pruneDirs(root string, sources []Source) error {
 	return errors.Join(errs...)
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────────
-
 func hashURL(u string) string {
 	sum := sha256.Sum256([]byte(u))
 	return hex.EncodeToString(sum[:])[:16]
 }
 
-// fileName is deterministic in the URL, so the same image always lands on the
-// same path however often it is synced: a readable slug plus enough of the URL
-// hash to keep it unique.
 func fileName(d desired, providerName, ext string) string {
-	slug := slugify(basename(d.url))
+	slug := slugify(d.image.Title)
 	if slug == "" {
-		// Nothing in the URL names the image; the provider name at least
-		// matches the directory it lands in.
+		slug = slugify(basename(d.url))
+	}
+	if slug == "" {
 		slug = strings.ToLower(slugifyKeepUnderscore(providerName))
 	}
 	if slug == "" {
@@ -571,11 +490,6 @@ func fileName(d desired, providerName, ext string) string {
 	return slug + "-" + d.key[:min(len(d.key), hashLen)] + ext
 }
 
-// basename picks the most descriptive path segment of a URL. Image CDNs vary:
-// Commons and TMDB put the name last ("Mona Lisa.jpg"), Apple and the Art
-// Institute end every URL with the same rendering parameters
-// ("1200x1200bb.jpg", "default.jpg"), where the segment before it is the one
-// worth keeping. It returns "" when nothing in the URL is descriptive.
 func basename(raw string) string {
 	p := raw
 	if u, err := url.Parse(raw); err == nil {
@@ -587,8 +501,6 @@ func basename(raw string) string {
 
 	segments := strings.Split(strings.Trim(p, "/"), "/")
 	for i := len(segments) - 1; i >= 0 && i >= len(segments)-2; i-- {
-		// Apple serves "<original filename>.jpg/1200x1200bb.jpg", so the
-		// candidate segment can carry an extension wherever it sits.
 		name := trimImageExt(segments[i])
 		if descriptive(name) {
 			return name
@@ -597,7 +509,6 @@ func basename(raw string) string {
 	return ""
 }
 
-// trimImageExt drops a trailing file extension from a path segment.
 func trimImageExt(name string) string {
 	if ext := path.Ext(name); len(ext) > 1 && len(ext) <= 5 {
 		return strings.TrimSuffix(name, ext)
@@ -605,8 +516,6 @@ func trimImageExt(name string) string {
 	return name
 }
 
-// boilerplate names appear at the end of every URL from a given CDN and say
-// nothing about the individual image.
 var boilerplate = map[string]bool{
 	"default": true, "original": true, "full": true, "image": true,
 	"images": true, "img": true, "photo": true, "thumb": true,
@@ -614,9 +523,6 @@ var boilerplate = map[string]bool{
 	"large": true, "small": true, "medium": true, "raw": true,
 }
 
-// descriptive reports whether a path segment is worth putting in a filename:
-// not boilerplate, not a bare size token ("1200x1200bb", "library_600x900_2x"),
-// and not a long opaque hex digest.
 func descriptive(name string) bool {
 	if len(name) < 3 {
 		return false
@@ -631,8 +537,6 @@ func descriptive(name string) bool {
 	return !isHexDigest(lower)
 }
 
-// sizeToken matches names that are only dimensions, optionally with a scale or
-// crop suffix: "600x900", "1200x1200bb", "library_600x900_2x".
 func sizeToken(name string) bool {
 	name = strings.TrimPrefix(name, "library_")
 	name = strings.TrimPrefix(name, "header_")
@@ -655,7 +559,6 @@ func allDigits(s string) bool {
 	return true
 }
 
-// isHexDigest matches the opaque hashes and UUIDs CDNs use as directory names.
 func isHexDigest(s string) bool {
 	hex := 0
 	for _, r := range s {
@@ -670,13 +573,6 @@ func isHexDigest(s string) bool {
 	return hex >= 16
 }
 
-// titleFrom turns a URL's descriptive segment into a readable title tag.
-func titleFrom(raw string) string {
-	name := strings.NewReplacer("_", " ", "-", " ").Replace(basename(raw))
-	return strings.TrimSpace(strings.Join(strings.Fields(name), " "))
-}
-
-// slugify reduces s to a filename-safe slug.
 func slugify(s string) string {
 	var b strings.Builder
 	dash := false
@@ -696,7 +592,6 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// sanitize makes a provider name safe to use as a single path element.
 func sanitize(name string) string {
 	if s := slugifyKeepUnderscore(name); s != "" {
 		return s
@@ -717,9 +612,6 @@ func slugifyKeepUnderscore(s string) string {
 	return strings.Trim(b.String(), "-.")
 }
 
-// imageExt picks a file extension from the response's content type, falling
-// back to sniffing. A non-image body (an HTML error page, say) is an error so
-// it never reaches the cache.
 func imageExt(contentType string, body []byte) (string, error) {
 	typ := contentType
 	if mt, _, err := mime.ParseMediaType(contentType); err == nil {
@@ -762,8 +654,6 @@ func fileExists(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-// writeFile writes data atomically and stamps the file with mtime, so a photo
-// library that falls back to the filesystem date agrees with the EXIF one.
 func writeFile(dst string, data []byte, mtime time.Time) error {
 	dir := filepath.Dir(dst)
 	f, err := os.CreateTemp(dir, tmpPrefix+"*")
@@ -797,8 +687,6 @@ func writeFile(dst string, data []byte, mtime time.Time) error {
 	return nil
 }
 
-// loadManifest reads dir's manifest, returning an empty one if it is missing
-// or unreadable (a corrupt manifest just means everything gets re-downloaded).
 func loadManifest(dir string) manifest {
 	empty := manifest{Version: manifestVersion, Items: map[string]item{}}
 	data, err := os.ReadFile(filepath.Join(dir, manifestName))

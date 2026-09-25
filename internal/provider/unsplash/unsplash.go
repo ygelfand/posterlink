@@ -9,6 +9,7 @@
 package unsplash
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -69,11 +70,17 @@ func New(name string, opts provider.Options) (provider.Provider, error) {
 }
 
 type randomPhoto struct {
-	URLs map[string]string `json:"urls"`
+	URLs           map[string]string `json:"urls"`
+	Description    string            `json:"description"`
+	AltDescription string            `json:"alt_description"`
+	CreatedAt      string            `json:"created_at"`
+	User           struct {
+		Name string `json:"name"`
+	} `json:"user"`
 }
 
 // Fetch pulls a batch of random photos and returns their direct image URLs.
-func (u *Unsplash) Fetch(ctx context.Context) ([]string, error) {
+func (u *Unsplash) Fetch(ctx context.Context) ([]provider.Image, error) {
 	endpoint, err := url.Parse(u.apiBase + "/photos/random")
 	if err != nil {
 		return nil, err
@@ -112,11 +119,18 @@ func (u *Unsplash) Fetch(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("unsplash: decode: %w", err)
 	}
 
-	urls := make([]string, 0, len(photos))
+	images := make([]provider.Image, 0, len(photos))
 	for _, p := range photos {
-		if img := p.URLs[u.size]; img != "" {
-			urls = append(urls, img)
+		img := p.URLs[u.size]
+		if img == "" {
+			continue
 		}
+		images = append(images, provider.Image{
+			URL:     img,
+			Title:   cmp.Or(p.Description, p.AltDescription),
+			Creator: p.User.Name,
+			Date:    p.CreatedAt,
+		})
 	}
-	return urls, nil
+	return images, nil
 }

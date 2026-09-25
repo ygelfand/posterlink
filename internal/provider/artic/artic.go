@@ -96,32 +96,32 @@ func (a *ArtIC) queries() []string {
 }
 
 // Fetch runs every query and returns IIIF image URLs deduped across queries.
-func (a *ArtIC) Fetch(ctx context.Context) ([]string, error) {
+func (a *ArtIC) Fetch(ctx context.Context) ([]provider.Image, error) {
 	seen := make(map[string]struct{})
-	var urls []string
+	var images []provider.Image
 	var firstErr error
 
 	for _, q := range a.queries() {
-		got, err := a.searchURLs(ctx, q)
+		got, err := a.search(ctx, q)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
-		for _, u := range got {
-			if _, dup := seen[u]; dup {
+		for _, img := range got {
+			if _, dup := seen[img.URL]; dup {
 				continue
 			}
-			seen[u] = struct{}{}
-			urls = append(urls, u)
+			seen[img.URL] = struct{}{}
+			images = append(images, img)
 		}
 	}
 
-	if len(urls) == 0 && firstErr != nil {
+	if len(images) == 0 && firstErr != nil {
 		return nil, firstErr
 	}
-	return urls, nil
+	return images, nil
 }
 
 // Preview returns one group per query (artist or the general term).
@@ -130,14 +130,14 @@ func (a *ArtIC) Preview(ctx context.Context) ([]provider.Group, error) {
 	var firstErr error
 
 	for _, q := range a.queries() {
-		urls, err := a.searchURLs(ctx, q)
+		images, err := a.search(ctx, q)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
-		groups = append(groups, provider.Group{Label: "artic/" + q, URLs: urls})
+		groups = append(groups, provider.Group{Label: "artic/" + q, Images: images})
 	}
 
 	if len(groups) == 0 && firstErr != nil {
@@ -150,6 +150,8 @@ type searchResponse struct {
 	Data []struct {
 		ImageID     string `json:"image_id"`
 		ArtistTitle string `json:"artist_title"`
+		Title       string `json:"title"`
+		DateDisplay string `json:"date_display"`
 		Thumbnail   struct {
 			Width  int `json:"width"`
 			Height int `json:"height"`
@@ -160,11 +162,11 @@ type searchResponse struct {
 	} `json:"config"`
 }
 
-func (a *ArtIC) searchURLs(ctx context.Context, q string) ([]string, error) {
+func (a *ArtIC) search(ctx context.Context, q string) ([]provider.Image, error) {
 	v := url.Values{}
 	v.Set("q", q)
 	v.Set("query[term][is_public_domain]", "true")
-	v.Set("fields", "id,image_id,thumbnail,artist_title")
+	v.Set("fields", "id,image_id,thumbnail,artist_title,title,date_display")
 	v.Set("limit", strconv.Itoa(a.limit))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL+"?"+v.Encode(), nil)
@@ -195,7 +197,7 @@ func (a *ArtIC) searchURLs(ctx context.Context, q string) ([]string, error) {
 	wantArtist := strings.ToLower(q)
 
 	base := strings.TrimRight(body.Config.IIIFURL, "/")
-	var urls []string
+	var images []provider.Image
 	for _, d := range body.Data {
 		if d.ImageID == "" || d.Thumbnail.Width <= 0 || d.Thumbnail.Height <= 0 {
 			continue
@@ -206,9 +208,14 @@ func (a *ArtIC) searchURLs(ctx context.Context, q string) ([]string, error) {
 		if a.portrait && d.Thumbnail.Height <= d.Thumbnail.Width {
 			continue
 		}
-		urls = append(urls, a.imageURL(base, d.ImageID, d.Thumbnail.Width, d.Thumbnail.Height))
+		images = append(images, provider.Image{
+			URL:     a.imageURL(base, d.ImageID, d.Thumbnail.Width, d.Thumbnail.Height),
+			Title:   d.Title,
+			Creator: d.ArtistTitle,
+			Date:    d.DateDisplay,
+		})
 	}
-	return urls, nil
+	return images, nil
 }
 
 // imageURL builds the IIIF URL, cropping to the target aspect in fill mode.

@@ -80,6 +80,7 @@ func runPreview(_ *cobra.Command, _ []string) error {
 			fmt.Fprintf(os.Stderr, "warning: %s: %v\n", name, err)
 			continue
 		}
+		enrichGroups(ctx, p, groups)
 		sections = append(sections, section{Provider: name, Weight: p.Weight(), Groups: groups})
 	}
 	if len(sections) == 0 {
@@ -96,9 +97,13 @@ func runPreview(_ *cobra.Command, _ []string) error {
 func printURLs(sections []section) {
 	for _, s := range sections {
 		for _, g := range s.Groups {
-			fmt.Printf("# %s / %s (%d)\n", s.Provider, g.Label, len(g.URLs))
-			for _, u := range g.URLs {
-				fmt.Println(u)
+			fmt.Printf("# %s / %s (%d)\n", s.Provider, g.Label, len(g.Images))
+			for _, img := range g.Images {
+				if c := img.Caption(); c != "" {
+					fmt.Printf("%s\t%s\n", img.URL, c)
+					continue
+				}
+				fmt.Println(img.URL)
 			}
 		}
 	}
@@ -134,9 +139,7 @@ func writeHTML(sections []section) error {
 
 	total := 0
 	for _, s := range sections {
-		for _, g := range s.Groups {
-			total += len(g.URLs)
-		}
+		total += countImages(s.Groups)
 	}
 	fmt.Printf("wrote %d images to %s\n", total, out)
 
@@ -172,14 +175,17 @@ var previewTmpl = template.Must(template.New("preview").Parse(`<!doctype html>
   .grid { display:flex; flex-wrap:wrap; gap:6px; }
   .grid img { height:180px; border-radius:4px; background:#222; min-width:60px; }
   .grid img.broken { outline:2px solid #833; opacity:.4; }
+  figure { margin:0; width:max-content; }
+  figcaption { color:#aaa; font-size:11px; max-width:150px; margin-top:2px;
+               overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 </style>
 <h1>posterlink preview <span class="count" id="status"></span></h1>
 {{range .Sections}}
 <h2>{{.Provider}} <span class="count">(weight {{.Weight}})</span></h2>
 {{range .Groups}}
-<h3>{{.Label}} <span class="count">— {{len .URLs}}</span></h3>
+<h3>{{.Label}} <span class="count">— {{len .Images}}</span></h3>
 <div class="grid">
-{{range .URLs}}<img data-src="{{.}}" height="180">{{end}}
+{{range .Images}}<figure><img data-src="{{.URL}}" height="180" title="{{.Caption}}"><figcaption>{{.Caption}}</figcaption></figure>{{end}}
 </div>
 {{end}}
 {{end}}

@@ -33,18 +33,30 @@ func providerGroups(ctx context.Context, p provider.Provider) ([]provider.Group,
 	if pv, ok := p.(provider.Previewer); ok {
 		return pv.Preview(ctx)
 	}
-	urls, err := p.Fetch(ctx)
+	images, err := p.Fetch(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return []provider.Group{{Label: p.Name(), URLs: urls}}, nil
+	return []provider.Group{{Label: p.Name(), Images: images}}, nil
 }
 
-// countURLs totals the images across groups.
-func countURLs(groups []provider.Group) int {
+// countImages totals the images across groups.
+func countImages(groups []provider.Group) int {
 	n := 0
 	for _, g := range groups {
-		n += len(g.URLs)
+		n += len(g.Images)
 	}
 	return n
+}
+
+// enrichGroups fills in metadata that costs extra requests and waits for it:
+// a one-shot command has no later refresh to pick the result up.
+func enrichGroups(ctx context.Context, p provider.Provider, groups []provider.Group) {
+	e, ok := p.(provider.Enricher)
+	if !ok {
+		return
+	}
+	for i := range groups {
+		groups[i].Images = e.Enrich(ctx, groups[i].Images)
+	}
 }

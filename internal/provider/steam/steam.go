@@ -8,13 +8,17 @@
 package steam
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	stdhtml "html"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +34,15 @@ const (
 // appidRe extracts app IDs from the store search results HTML (handles both
 // bare and JSON-escaped quotes).
 var appidRe = regexp.MustCompile(`data-ds-appid=\\?"?(\d+)`)
+
+// rowRe pairs each search result's app ID with its title. The payload is a
+// JSON-escaped HTML fragment, so quotes and the closing slash carry backslashes.
+var rowRe = regexp.MustCompile(`data-ds-appid=\\?"?(\d+)[\s\S]*?<span class=\\?"title\\?">([^<]+)<\\?/span>`)
+
+// imgAppidRe recovers the app ID from a capsule URL.
+var imgAppidRe = regexp.MustCompile(`/apps/(\d+)/`)
+
+const detailsURL = "https://store.steampowered.com/api/appdetails"
 
 // sizeFiles maps the configured size to the CDN filename. Both are 2:3.
 var sizeFiles = map[string]string{
@@ -51,7 +64,39 @@ type Steam struct {
 	count    int
 	validate bool
 
+	names  *nameCache
 	client *http.Client
+}
+
+// nameCache holds app names, which never change, for the lifetime of the
+// process. The charts endpoint returns IDs only, so names for those apps cost
+// one appdetails request each; Enrich fills them in.
+type nameCache struct {
+	mu sync.RWMutex
+	m  map[int]string
+}
+
+func newNameCache() *nameCache { return &nameCache{m: make(map[int]string)} }
+
+func (c *nameCache) get(id int) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.m[id]
+}
+
+func (c *nameCache) set(id int, name string) {
+	if name == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.m[id] = name
+}
+
+// app is one Steam application and what the source knew about it.
+type app struct {
+	id   int
+	name string
 }
 
 // New constructs a Steam provider from its configuration subtree.
@@ -68,39 +113,40 @@ func New(name string, opts provider.Options) (provider.Provider, error) {
 		cc:       opts.String("cc", "us"),
 		count:    opts.Int("count", 100),
 		validate: opts.Bool("validate", true),
+		names:    newNameCache(),
 		client:   &http.Client{Timeout: 10 * time.Second},
 	}, nil
 }
 
 // Fetch collects app IDs from all configured sources (deduped) and returns the
 // existing portrait-art URLs.
-func (s *Steam) Fetch(ctx context.Context) ([]string, error) {
+func (s *Steam) Fetch(ctx context.Context) ([]provider.Image, error) {
 	seen := make(map[int]struct{})
-	var appids []int
+	var apps []app
 	var firstErr error
 
 	for _, src := range s.sources {
-		ids, err := s.collect(ctx, src)
+		got, err := s.collect(ctx, src)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
-		for _, id := range ids {
-			if _, dup := seen[id]; dup {
+		for _, a := range got {
+			if _, dup := seen[a.id]; dup {
 				continue
 			}
-			seen[id] = struct{}{}
-			appids = append(appids, id)
+			seen[a.id] = struct{}{}
+			apps = append(apps, a)
 		}
 	}
 
-	urls := s.imagesFor(ctx, appids)
-	if len(urls) == 0 && firstErr != nil {
+	images := s.imagesFor(ctx, apps)
+	if len(images) == 0 && firstErr != nil {
 		return nil, firstErr
 	}
-	return urls, nil
+	return images, nil
 }
 
 // Preview returns one labeled group per source.
@@ -109,14 +155,14 @@ func (s *Steam) Preview(ctx context.Context) ([]provider.Group, error) {
 	var firstErr error
 
 	for _, src := range s.sources {
-		ids, err := s.collect(ctx, src)
+		apps, err := s.collect(ctx, src)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
-		groups = append(groups, provider.Group{Label: "steam/" + src, URLs: s.imagesFor(ctx, ids)})
+		groups = append(groups, provider.Group{Label: "steam/" + src, Images: s.imagesFor(ctx, apps)})
 	}
 
 	if len(groups) == 0 && firstErr != nil {
@@ -125,7 +171,7 @@ func (s *Steam) Preview(ctx context.Context) ([]provider.Group, error) {
 	return groups, nil
 }
 
-func (s *Steam) collect(ctx context.Context, source string) ([]int, error) {
+func (s *Steam) collect(ctx context.Context, source string) ([]app, error) {
 	switch source {
 	case "most_played":
 		return s.mostPlayed(ctx)
@@ -136,7 +182,8 @@ func (s *Steam) collect(ctx context.Context, source string) ([]int, error) {
 	}
 }
 
-func (s *Steam) mostPlayed(ctx context.Context) ([]int, error) {
+// mostPlayed returns the charts app IDs. The endpoint carries no names.
+func (s *Steam) mostPlayed(ctx context.Context) ([]app, error) {
 	var body struct {
 		Response struct {
 			Ranks []struct {
@@ -147,18 +194,18 @@ func (s *Steam) mostPlayed(ctx context.Context) ([]int, error) {
 	if err := s.getJSON(ctx, chartsURL, &body); err != nil {
 		return nil, err
 	}
-	ids := make([]int, 0, len(body.Response.Ranks))
+	apps := make([]app, 0, len(body.Response.Ranks))
 	for _, r := range body.Response.Ranks {
-		ids = append(ids, r.Appid)
+		apps = append(apps, app{id: r.Appid})
 	}
-	return ids, nil
+	return apps, nil
 }
 
 // search pulls app IDs from the store search results for a given filter (e.g.
 // "topsellers"). The endpoint returns app IDs embedded in an HTML fragment, so
 // we extract them by regex rather than JSON-decoding (the payload contains
 // unescaped control characters).
-func (s *Steam) search(ctx context.Context, filter string) ([]int, error) {
+func (s *Steam) search(ctx context.Context, filter string) ([]app, error) {
 	u := fmt.Sprintf("%s?filter=%s&cc=%s&l=en&start=0&count=%d&infinite=1&json=1",
 		searchURL, url.QueryEscape(filter), url.QueryEscape(s.cc), s.count)
 
@@ -166,34 +213,46 @@ func (s *Steam) search(ctx context.Context, filter string) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
+	html := string(body)
+
+	names := make(map[int]string)
+	for _, m := range rowRe.FindAllStringSubmatch(html, -1) {
+		id, err := strconv.Atoi(m[1])
+		if err != nil || id <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(stdhtml.UnescapeString(m[2]))
+		names[id] = name
+		s.names.set(id, name)
+	}
 
 	seen := make(map[int]struct{})
-	var ids []int
-	for _, m := range appidRe.FindAllStringSubmatch(string(body), -1) {
-		var id int
-		if _, err := fmt.Sscan(m[1], &id); err != nil || id <= 0 {
+	var apps []app
+	for _, m := range appidRe.FindAllStringSubmatch(html, -1) {
+		id, err := strconv.Atoi(m[1])
+		if err != nil || id <= 0 {
 			continue
 		}
 		if _, dup := seen[id]; dup {
 			continue
 		}
 		seen[id] = struct{}{}
-		ids = append(ids, id)
+		apps = append(apps, app{id: id, name: names[id]})
 	}
-	return ids, nil
+	return apps, nil
 }
 
 // imagesFor builds the capsule URL for each app ID and, unless validation is
 // disabled, keeps only the ones that actually exist (HEAD == 200). Order is
 // preserved.
-func (s *Steam) imagesFor(ctx context.Context, appids []int) []string {
-	urls := make([]string, len(appids))
-	keep := make([]bool, len(appids))
+func (s *Steam) imagesFor(ctx context.Context, apps []app) []provider.Image {
+	urls := make([]string, len(apps))
+	keep := make([]bool, len(apps))
 
 	sem := make(chan struct{}, 10)
 	var wg sync.WaitGroup
-	for i, id := range appids {
-		urls[i] = fmt.Sprintf("%s%d/%s", imgBase, id, s.file)
+	for i, a := range apps {
+		urls[i] = fmt.Sprintf("%s%d/%s", imgBase, a.id, s.file)
 		if !s.validate {
 			keep[i] = true
 			continue
@@ -208,13 +267,133 @@ func (s *Steam) imagesFor(ctx context.Context, appids []int) []string {
 	}
 	wg.Wait()
 
-	out := make([]string, 0, len(appids))
-	for i := range appids {
-		if keep[i] {
-			out = append(out, urls[i])
+	out := make([]provider.Image, 0, len(apps))
+	for i, a := range apps {
+		if !keep[i] {
+			continue
 		}
+		out = append(out, provider.Image{
+			URL:   urls[i],
+			Title: cmp.Or(a.name, s.names.get(a.id)),
+		})
 	}
 	return out
+}
+
+// Enrich fills in the titles the charts endpoint does not carry, one
+// appdetails request per app, and remembers them for the rest of the process.
+func (s *Steam) Enrich(ctx context.Context, images []provider.Image) []provider.Image {
+	type todo struct {
+		index int
+		id    int
+	}
+	var work []todo
+	for i, img := range images {
+		if img.Title != "" {
+			continue
+		}
+		id := appidFromURL(img.URL)
+		if id == 0 {
+			continue
+		}
+		if name := s.names.get(id); name != "" {
+			images[i].Title = name
+			continue
+		}
+		work = append(work, todo{index: i, id: id})
+	}
+	if len(work) == 0 {
+		return images
+	}
+
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	throttled := false
+
+	for _, w := range work {
+		if ctx.Err() != nil {
+			break
+		}
+		mu.Lock()
+		stop := throttled
+		mu.Unlock()
+		if stop {
+			break
+		}
+
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(w todo) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			name, limited := s.appName(ctx, w.id)
+			mu.Lock()
+			defer mu.Unlock()
+			if limited {
+				throttled = true
+				return
+			}
+			if name != "" {
+				s.names.set(w.id, name)
+				images[w.index].Title = name
+			}
+		}(w)
+	}
+	wg.Wait()
+	return images
+}
+
+// appName resolves one app's name. The response is keyed by an ID that does
+// not always match the one requested, so the single entry is taken as-is.
+func (s *Steam) appName(ctx context.Context, id int) (string, bool) {
+	u := fmt.Sprintf("%s?appids=%d&filters=basic&l=en", detailsURL, id)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", false
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "", true
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+
+	var body map[string]struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", false
+	}
+	for _, entry := range body {
+		if entry.Success {
+			return entry.Data.Name, false
+		}
+	}
+	return "", false
+}
+
+func appidFromURL(u string) int {
+	m := imgAppidRe.FindStringSubmatch(u)
+	if m == nil {
+		return 0
+	}
+	id, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 func (s *Steam) exists(ctx context.Context, u string) bool {

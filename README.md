@@ -27,15 +27,37 @@ metadata attached. See [Local mirror](#local-mirror-posterlink-sync).
 
 ## Endpoints
 
-| Method | Path        | Behavior                                                             |
-| ------ | ----------- | -------------------------------------------------------------------- |
-| `GET`  | `/poster`   | `302` → random image; `Cache-Control: no-store`; `503` while warming |
-| `GET`  | `/healthz`  | JSON `{status, size, sources}` (`503` until the first pool lands)     |
+| Method | Path          | Behavior                                                                   |
+| ------ | ------------- | -------------------------------------------------------------------------- |
+| `GET`  | `/poster`     | `302` → random image; `Cache-Control: no-store`; `503` while warming       |
+| `GET`  | `/poster.jpg` | the image **bytes**, fetched and validated server-side; `502` if none works |
+| `GET`  | `/healthz`    | JSON `{status, size, sources, invalid}` (`503` until the first pool lands)  |
 
-Optional `?providers=` (comma-delimited) restricts `/poster` to specific enabled
-providers, e.g. `/poster?providers=wikidata` or `/poster?providers=tmdb,steam`.
-Requesting only disabled/unknown providers returns `404`. Other query params
-(like the wallpanel `?ts=` cache-buster) are ignored.
+Optional `?providers=` (comma-delimited) restricts either poster endpoint to
+specific enabled providers, e.g. `/poster?providers=wikidata` or
+`/poster.jpg?providers=tmdb,steam`. Requesting only disabled/unknown providers
+returns `404`. Other query params (like the wallpanel `?ts=` cache-buster) are
+ignored.
+
+### `/poster.jpg` — serve instead of redirect
+
+For clients that want a real image at a real image URL rather than a redirect,
+`/poster.jpg` fetches the picked image itself, follows redirects (Wikimedia's
+`Special:FilePath` needs it), and **validates** the result: the body has to
+sniff as an image, and JPEG/PNG/GIF must decode. A non-image, a truncated file
+or a 404 is not served — posterlink picks another image and tries again, up to
+three times, then returns `502`.
+
+Failures that are permanent (`4xx`, a corrupt body) are remembered and those
+URLs are skipped until the next pool refresh clears the list; `/healthz` reports
+the count as `invalid`. Timeouts and `5xx` are treated as transient and not
+remembered.
+
+The response carries the real content type (a PNG source is served as
+`image/png` — nothing is transcoded), plus `X-Poster-Provider` and
+`X-Poster-Source` headers naming where the image came from. EXIF and XMP
+describing the image are embedded on the way through, as with the local mirror
+below.
 
 ## Configuration
 
@@ -67,9 +89,19 @@ A provider implements a small interface and self-registers:
 type Provider interface {
     Name() string
     Weight() float64
-    Fetch(ctx context.Context) ([]string, error)
+    Fetch(ctx context.Context) ([]Image, error)
+}
+
+type Image struct {
+    URL, Title, Creator, Date, Description string
 }
 ```
+
+Everything but `URL` is optional; whatever a source knows becomes the image's
+caption and EXIF. A provider whose metadata costs extra requests can also
+implement `Enrich(ctx, []Image) []Image`, which `serve` runs in the background
+(the pool is already serving; the result is published when it lands) and which
+`sync` and `preview` wait for.
 
 Selection is **weighted across providers, uniform within** — so a `tmdb` weight
 of `1.0` and an `unsplash` weight of `0.2` yields roughly an 83/17 blend
@@ -87,6 +119,9 @@ Adding one is a single file under `internal/provider/<name>/` that calls
 - **`steam`** — video-game posters from Steam's 600x900 portrait capsule art.
   No API key; pulls popular app IDs from the charts/search endpoints and
   HEAD-validates each image. Supports `size` (`1x`/`2x`), `sources`, and `cc`.
+  Titles come free from the store search HTML; the charts endpoint returns app
+  IDs only, so those names are resolved through `appdetails` and cached in
+  memory for the life of the process.
 - **`artic`** — famous paintings from the Art Institute of Chicago (no API key).
   Uses IIIF to crop server-side: `fit: fill` full-bleed-crops to your screen
   `aspect`; `fit: fit` letterboxes the whole work. Curated by `artists`.
@@ -104,12 +139,12 @@ with EXIF and XMP metadata so a photo library indexes it properly:
 /srv/immich/posters/
 ├── tmdb/
 │   ├── .posterlink.json          # manifest: source URL of every file
-│   ├── 1pdfLvkbY9ohJlCjQH2CZjjYVvJ-6f3a1c9d21.jpg
+│   ├── dune-part-two-6f3a1c9d21.jpg
 │   └── ...
 ├── itunes_jazz/
-│   └── kind-of-blue-0b77e1ca04.jpg
+│   └── kind-of-blue-f226ee03d5.jpg
 └── wikidata/
-    └── mona-lisa-by-leonardo-3c91af7e02.jpg
+    └── mona-lisa-fa08baa2b8.jpg
 ```
 
 ```sh
@@ -144,19 +179,41 @@ Each image gets EXIF (a JPEG APP1 segment or a PNG `eXIf` chunk) and an XMP
 packet; formats that cannot carry either get an `<image>.xmp` sidecar. No
 `exiftool` needed.
 
-| Field                                | Value                                          |
-| ------------------------------------ | ---------------------------------------------- |
-| `Make` / `Model`                     | `posterlink` / the provider name               |
-| `ImageDescription`, `dc:description` | provider and list, e.g. `tmdb / movie/popular` |
-| `DateTimeOriginal`, `xmp:CreateDate` | when the image was downloaded                  |
-| `UserComment`, `dc:source`           | the source URL                                  |
-| `dc:subject` (keywords)              | `posterlink`, the provider, the list            |
+The description is what the source actually knows about the picture, not the
+plumbing that fetched it:
 
-In Immich the make/model pair is searchable like a camera, so `posterlink` +
-`tmdb` isolates exactly those images — handy for a smart album feeding a photo
-frame. Point an [external
+| provider   | `ImageDescription`                  |
+| ---------- | ----------------------------------- |
+| `tmdb`     | Dune: Part Two (2024)               |
+| `itunes`   | Kind of Blue - Miles Davis (1959)   |
+| `artic`    | Water Lilies - Claude Monet (1906)  |
+| `wikidata` | Mona Lisa - Leonardo da Vinci (1503) |
+| `unsplash` | foggy pine forest - Jane Doe (2019) |
+| `steam`    | Hades                               |
+
+| Field                                | Value                                             |
+| ------------------------------------ | ------------------------------------------------- |
+| `ImageDescription`, `dc:description` | the caption above                                 |
+| `DateTimeOriginal`, `xmp:CreateDate` | the **work's own** date, omitted when unknown     |
+| `UserComment`, `dc:source`           | the source URL                                    |
+
+Because the date is the work's, *Kind of Blue* lands in 1959 on an Immich
+timeline and *Mona Lisa* in 1503, rather than all of them bunching at the
+moment you happened to sync. Point an [external
 library](https://immich.app/docs/guides/external-library) at the cache root and
-scan it after each sync.
+scan it after each sync; the captions are searchable there.
+
+EXIF string values are 8-bit, so they are written as Latin-1 — `Eugène` is one
+byte per character, and anything Latin-1 cannot represent is dropped. The XMP
+packet is UTF-8 and keeps the full text either way.
+
+Filenames come from the title too, so the cache reads as a library:
+
+```
+tmdb/dune-part-two-6f3a1c9d21.jpg
+itunes_jazz/kind-of-blue-f226ee03d5.jpg
+wikidata/mona-lisa-fa08baa2b8.jpg
+```
 
 ### Config
 

@@ -134,9 +134,6 @@ func runSync(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-// collectSources lists every cacheable provider's images. A provider that
-// cannot be built or listed is skipped, and its directory name is returned in
-// keep so a transient API failure never prunes an existing cache.
 func collectSources(ctx context.Context, cfg *config.Config, names []string, log *slog.Logger) (sources []cache.Source, keep []string, failed int) {
 	for _, name := range names {
 		opts := cfg.ProviderOptions(name)
@@ -165,6 +162,9 @@ func collectSources(ctx context.Context, cfg *config.Config, names []string, log
 
 		fetchCtx, cancel := context.WithTimeout(ctx, syncFetchTimeout)
 		groups, err := providerGroups(fetchCtx, p)
+		if err == nil {
+			enrichGroups(fetchCtx, p, groups)
+		}
 		cancel()
 		if err != nil {
 			log.Warn("provider listing failed", "provider", name, "error", err)
@@ -172,14 +172,14 @@ func collectSources(ctx context.Context, cfg *config.Config, names []string, log
 			failed++
 			continue
 		}
-		if countURLs(groups) == 0 {
+		if countImages(groups) == 0 {
 			log.Warn("provider returned no images", "provider", name)
 			keep = append(keep, dirName)
 			failed++
 			continue
 		}
 
-		log.Info("provider listed", "provider", name, "images", countURLs(groups))
+		log.Info("provider listed", "provider", name, "images", countImages(groups))
 		sources = append(sources, cache.Source{
 			Name:   name,
 			Dir:    dirName,

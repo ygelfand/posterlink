@@ -63,8 +63,11 @@ func New(name string, opts provider.Options) (provider.Provider, error) {
 
 // buildQuery assembles the SPARQL query from the configured filters.
 func (w *Wikidata) buildQuery() string {
+	// The labels and dates resolve against the limited set: asking for them in
+	// the same pattern as the scan makes the endpoint time out at 60s.
 	var b strings.Builder
-	b.WriteString("SELECT ?image WHERE { ?item wdt:P31 " + painting + "; wdt:P18 ?image; wikibase:sitelinks ?links. ")
+	b.WriteString("SELECT ?image ?itemLabel ?creatorLabel ?inception WHERE { { ")
+	b.WriteString("SELECT ?item ?image WHERE { ?item wdt:P31 " + painting + "; wdt:P18 ?image; wikibase:sitelinks ?links. ")
 	fmt.Fprintf(&b, "FILTER(?links >= %d) ", w.minSitelinks)
 	if w.collection != "" {
 		fmt.Fprintf(&b, "?item wdt:P195 %s. ", qref(w.collection))
@@ -78,7 +81,9 @@ func (w *Wikidata) buildQuery() string {
 	if w.genre != "" {
 		fmt.Fprintf(&b, "?item wdt:P136 %s. ", qref(w.genre))
 	}
-	fmt.Fprintf(&b, "} LIMIT %d", w.limit)
+	fmt.Fprintf(&b, "} LIMIT %d } ", w.limit)
+	b.WriteString("OPTIONAL { ?item wdt:P170 ?creator. } OPTIONAL { ?item wdt:P571 ?inception. } ")
+	b.WriteString(`SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } }`)
 	return b.String()
 }
 
@@ -91,18 +96,23 @@ func qref(s string) string {
 	return "wd:" + s
 }
 
+type sparqlValue struct {
+	Value string `json:"value"`
+}
+
 type sparqlResponse struct {
 	Results struct {
 		Bindings []struct {
-			Image struct {
-				Value string `json:"value"`
-			} `json:"image"`
+			Image     sparqlValue `json:"image"`
+			ItemLabel sparqlValue `json:"itemLabel"`
+			Creator   sparqlValue `json:"creatorLabel"`
+			Inception sparqlValue `json:"inception"`
 		} `json:"bindings"`
 	} `json:"results"`
 }
 
 // Fetch runs the SPARQL query and returns Commons image URLs.
-func (w *Wikidata) Fetch(ctx context.Context) ([]string, error) {
+func (w *Wikidata) Fetch(ctx context.Context) ([]provider.Image, error) {
 	u := endpoint + "?format=json&query=" + url.QueryEscape(w.buildQuery())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -127,7 +137,7 @@ func (w *Wikidata) Fetch(ctx context.Context) ([]string, error) {
 	}
 
 	seen := make(map[string]struct{})
-	var urls []string
+	var images []provider.Image
 	for _, b := range body.Results.Bindings {
 		img := imageURL(b.Image.Value, w.width)
 		if img == "" {
@@ -137,9 +147,23 @@ func (w *Wikidata) Fetch(ctx context.Context) ([]string, error) {
 			continue
 		}
 		seen[img] = struct{}{}
-		urls = append(urls, img)
+		images = append(images, provider.Image{
+			URL:     img,
+			Title:   label(b.ItemLabel.Value),
+			Creator: label(b.Creator.Value),
+			Date:    b.Inception.Value,
+		})
 	}
-	return urls, nil
+	return images, nil
+}
+
+// label drops the Q-id the label service returns when an item has no English
+// label, which is noise in a caption.
+func label(s string) string {
+	if strings.HasPrefix(s, "Q") && len(s) > 1 && strings.IndexFunc(s[1:], func(r rune) bool { return r < '0' || r > '9' }) < 0 {
+		return ""
+	}
+	return s
 }
 
 // imageURL upgrades the Commons FilePath URL to https and requests a scaled

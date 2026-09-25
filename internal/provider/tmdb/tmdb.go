@@ -7,6 +7,7 @@
 package tmdb
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -73,14 +74,19 @@ func New(name string, opts provider.Options) (provider.Provider, error) {
 
 type listResponse struct {
 	Results []struct {
-		PosterPath string `json:"poster_path"`
+		PosterPath   string `json:"poster_path"`
+		Title        string `json:"title"`
+		Name         string `json:"name"`
+		ReleaseDate  string `json:"release_date"`
+		FirstAirDate string `json:"first_air_date"`
+		Overview     string `json:"overview"`
 	} `json:"results"`
 }
 
-// Fetch pulls every configured list and returns CDN URLs deduped across lists.
-func (t *TMDB) Fetch(ctx context.Context) ([]string, error) {
+// Fetch pulls every configured list and returns images deduped across lists.
+func (t *TMDB) Fetch(ctx context.Context) ([]provider.Image, error) {
 	seen := make(map[string]struct{})
-	var urls []string
+	var images []provider.Image
 	var firstErr error
 
 	for _, list := range t.lists {
@@ -91,19 +97,19 @@ func (t *TMDB) Fetch(ctx context.Context) ([]string, error) {
 			}
 			continue
 		}
-		for _, u := range got {
-			if _, dup := seen[u]; dup {
+		for _, img := range got {
+			if _, dup := seen[img.URL]; dup {
 				continue
 			}
-			seen[u] = struct{}{}
-			urls = append(urls, u)
+			seen[img.URL] = struct{}{}
+			images = append(images, img)
 		}
 	}
 
-	if len(urls) == 0 && firstErr != nil {
+	if len(images) == 0 && firstErr != nil {
 		return nil, firstErr
 	}
-	return urls, nil
+	return images, nil
 }
 
 // Preview returns one labeled group per configured list, deduped within each
@@ -113,14 +119,14 @@ func (t *TMDB) Preview(ctx context.Context) ([]provider.Group, error) {
 	var firstErr error
 
 	for _, list := range t.lists {
-		urls, err := t.fetchList(ctx, list)
+		images, err := t.fetchList(ctx, list)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
-		groups = append(groups, provider.Group{Label: list, URLs: urls})
+		groups = append(groups, provider.Group{Label: list, Images: images})
 	}
 
 	if len(groups) == 0 && firstErr != nil {
@@ -130,37 +136,35 @@ func (t *TMDB) Preview(ctx context.Context) ([]provider.Group, error) {
 }
 
 // fetchList pulls all pages of a single list, deduped within the list.
-func (t *TMDB) fetchList(ctx context.Context, list string) ([]string, error) {
+func (t *TMDB) fetchList(ctx context.Context, list string) ([]provider.Image, error) {
 	seen := make(map[string]struct{})
-	var urls []string
+	var images []provider.Image
 	var firstErr error
 
 	for page := 1; page <= t.pages; page++ {
-		paths, err := t.fetchPage(ctx, list, page)
+		got, err := t.fetchPage(ctx, list, page)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
-		for _, p := range paths {
-			// poster_path already begins with "/"; avoid a double slash.
-			u := t.imageBase + t.size + p
-			if _, dup := seen[u]; dup {
+		for _, img := range got {
+			if _, dup := seen[img.URL]; dup {
 				continue
 			}
-			seen[u] = struct{}{}
-			urls = append(urls, u)
+			seen[img.URL] = struct{}{}
+			images = append(images, img)
 		}
 	}
 
-	if len(urls) == 0 && firstErr != nil {
+	if len(images) == 0 && firstErr != nil {
 		return nil, firstErr
 	}
-	return urls, nil
+	return images, nil
 }
 
-func (t *TMDB) fetchPage(ctx context.Context, list string, page int) ([]string, error) {
+func (t *TMDB) fetchPage(ctx context.Context, list string, page int) ([]provider.Image, error) {
 	u, err := url.Parse(t.apiBase + list)
 	if err != nil {
 		return nil, err
@@ -196,11 +200,19 @@ func (t *TMDB) fetchPage(ctx context.Context, list string, page int) ([]string, 
 		return nil, fmt.Errorf("tmdb: decode %s page %d: %w", list, page, err)
 	}
 
-	paths := make([]string, 0, len(body.Results))
+	images := make([]provider.Image, 0, len(body.Results))
 	for _, r := range body.Results {
-		if r.PosterPath != "" {
-			paths = append(paths, r.PosterPath)
+		if r.PosterPath == "" {
+			continue
 		}
+		title := cmp.Or(r.Title, r.Name)
+		// poster_path already begins with "/"; avoid a double slash.
+		images = append(images, provider.Image{
+			URL:         t.imageBase + t.size + r.PosterPath,
+			Title:       title,
+			Date:        cmp.Or(r.ReleaseDate, r.FirstAirDate),
+			Description: r.Overview,
+		})
 	}
-	return paths, nil
+	return images, nil
 }

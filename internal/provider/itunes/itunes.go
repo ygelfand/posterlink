@@ -11,6 +11,7 @@
 package itunes
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -92,9 +93,9 @@ func (it *ITunes) items() []item {
 }
 
 // Fetch runs every curation source and returns artwork URLs deduped across them.
-func (it *ITunes) Fetch(ctx context.Context) ([]string, error) {
+func (it *ITunes) Fetch(ctx context.Context) ([]provider.Image, error) {
 	seen := make(map[string]struct{})
-	var urls []string
+	var images []provider.Image
 	var firstErr error
 
 	for _, q := range it.items() {
@@ -105,19 +106,19 @@ func (it *ITunes) Fetch(ctx context.Context) ([]string, error) {
 			}
 			continue
 		}
-		for _, u := range got {
-			if _, dup := seen[u]; dup {
+		for _, img := range got {
+			if _, dup := seen[img.URL]; dup {
 				continue
 			}
-			seen[u] = struct{}{}
-			urls = append(urls, u)
+			seen[img.URL] = struct{}{}
+			images = append(images, img)
 		}
 	}
 
-	if len(urls) == 0 && firstErr != nil {
+	if len(images) == 0 && firstErr != nil {
 		return nil, firstErr
 	}
-	return urls, nil
+	return images, nil
 }
 
 // Preview returns one group per curation source.
@@ -126,14 +127,14 @@ func (it *ITunes) Preview(ctx context.Context) ([]provider.Group, error) {
 	var firstErr error
 
 	for _, q := range it.items() {
-		urls, err := it.run(ctx, q)
+		images, err := it.run(ctx, q)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
-		groups = append(groups, provider.Group{Label: "itunes/" + q.label, URLs: urls})
+		groups = append(groups, provider.Group{Label: "itunes/" + q.label, Images: images})
 	}
 
 	if len(groups) == 0 && firstErr != nil {
@@ -142,7 +143,7 @@ func (it *ITunes) Preview(ctx context.Context) ([]provider.Group, error) {
 	return groups, nil
 }
 
-func (it *ITunes) run(ctx context.Context, q item) ([]string, error) {
+func (it *ITunes) run(ctx context.Context, q item) ([]provider.Image, error) {
 	if q.id != "" {
 		return it.lookup(ctx, q.id)
 	}
@@ -150,8 +151,11 @@ func (it *ITunes) run(ctx context.Context, q item) ([]string, error) {
 }
 
 type result struct {
-	ArtistName    string `json:"artistName"`
-	ArtworkURL100 string `json:"artworkUrl100"`
+	ArtistName     string `json:"artistName"`
+	ArtworkURL100  string `json:"artworkUrl100"`
+	CollectionName string `json:"collectionName"`
+	TrackName      string `json:"trackName"`
+	ReleaseDate    string `json:"releaseDate"`
 }
 
 type response struct {
@@ -159,7 +163,7 @@ type response struct {
 }
 
 // lookup returns artwork for an exact artist ID — no fuzzy matching.
-func (it *ITunes) lookup(ctx context.Context, id string) ([]string, error) {
+func (it *ITunes) lookup(ctx context.Context, id string) ([]provider.Image, error) {
 	v := url.Values{}
 	v.Set("id", id)
 	v.Set("entity", it.entity)
@@ -173,12 +177,12 @@ func (it *ITunes) lookup(ctx context.Context, id string) ([]string, error) {
 		return nil, err
 	}
 	// lookup returns the artist as results[0] (no artwork); take everything else.
-	return it.artworkURLs(body.Results, ""), nil
+	return it.artwork(body.Results, ""), nil
 }
 
 // search returns artwork for an artist name, filtered to exact artistName
 // matches to drop fuzzy album-title hits.
-func (it *ITunes) search(ctx context.Context, name string) ([]string, error) {
+func (it *ITunes) search(ctx context.Context, name string) ([]provider.Image, error) {
 	v := url.Values{}
 	v.Set("term", name)
 	v.Set("media", it.media)
@@ -193,17 +197,17 @@ func (it *ITunes) search(ctx context.Context, name string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return it.artworkURLs(body.Results, name), nil
+	return it.artwork(body.Results, name), nil
 }
 
-// artworkURLs builds sized artwork URLs. If wantArtist is non-empty, only rows
+// artwork builds sized artwork URLs. If wantArtist is non-empty, only rows
 // whose artistName matches (case-insensitive) are kept.
-func (it *ITunes) artworkURLs(results []result, wantArtist string) []string {
+func (it *ITunes) artwork(results []result, wantArtist string) []provider.Image {
 	want := strings.ToLower(strings.TrimSpace(wantArtist))
 	size := fmt.Sprintf("%dx%dbb", it.size, it.size)
 
 	seen := make(map[string]struct{})
-	var urls []string
+	var images []provider.Image
 	for _, r := range results {
 		if r.ArtworkURL100 == "" {
 			continue
@@ -216,9 +220,14 @@ func (it *ITunes) artworkURLs(results []result, wantArtist string) []string {
 			continue
 		}
 		seen[u] = struct{}{}
-		urls = append(urls, u)
+		images = append(images, provider.Image{
+			URL:     u,
+			Title:   cmp.Or(r.CollectionName, r.TrackName),
+			Creator: r.ArtistName,
+			Date:    r.ReleaseDate,
+		})
 	}
-	return urls
+	return images
 }
 
 func (it *ITunes) get(ctx context.Context, u string) (*response, error) {

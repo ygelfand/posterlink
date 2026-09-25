@@ -38,7 +38,6 @@ func testImage() image.Image {
 	return img
 }
 
-// dump writes an artifact to $EXIF_DUMP, for eyeballing with exiftool/identify.
 func dump(t *testing.T, name string, data []byte) {
 	dir := os.Getenv("EXIF_DUMP")
 	if dir == "" {
@@ -82,7 +81,6 @@ func TestApplyJPEG(t *testing.T) {
 		t.Error("XMP segment missing CreateDate")
 	}
 
-	// Re-applying must replace, not stack.
 	again, ok, err := Apply(out, testMeta())
 	if err != nil || !ok {
 		t.Fatalf("second Apply: ok=%v err=%v", ok, err)
@@ -96,7 +94,6 @@ func TestApplyJPEG(t *testing.T) {
 	}
 }
 
-// jpegSegments returns the payloads of the Exif and XMP APP1 segments.
 func jpegSegments(t *testing.T, data []byte) (exif, xmp [][]byte) {
 	t.Helper()
 	if !isJPEG(data) {
@@ -183,8 +180,6 @@ func TestExifBlobLayout(t *testing.T) {
 		t.Fatalf("IFD0 offset = %d, want 8", ifd0)
 	}
 
-	// Every entry's value must lie inside the blob, and the Exif sub-IFD
-	// pointer must address a well-formed IFD.
 	sub := walkIFD(t, blob, ifd0)
 	if sub == 0 {
 		t.Fatal("no Exif sub-IFD pointer in IFD0")
@@ -192,7 +187,6 @@ func TestExifBlobLayout(t *testing.T) {
 	walkIFD(t, blob, sub)
 }
 
-// walkIFD validates one IFD and returns the Exif sub-IFD offset if present.
 func walkIFD(t *testing.T, blob []byte, off int) int {
 	t.Helper()
 	if off+2 > len(blob) {
@@ -232,6 +226,29 @@ func walkIFD(t *testing.T, blob []byte, off int) int {
 		t.Errorf("IFD at %d chains to %d, want 0", off, next)
 	}
 	return subIFD
+}
+
+func TestExifStringsAreLatin1(t *testing.T) {
+	m := testMeta()
+	m.Description = "Amélie — Jean-Pierre Jeunet (2001)"
+	blob := exifBlob(m)
+
+	if bytes.Contains(blob, []byte("Amélie")) {
+		t.Error("UTF-8 leaked into an EXIF string")
+	}
+	if !bytes.Contains(blob, []byte("Am\xe9lie")) {
+		t.Error("é was not encoded as Latin-1 0xE9")
+	}
+	if !bytes.Contains(blob, []byte("Jean-Pierre Jeunet (2001)")) {
+		t.Error("ASCII tail did not survive")
+	}
+
+	if got := string(latin1("千と千尋")); got != "" {
+		t.Errorf("unrepresentable runes = %q, want them dropped", got)
+	}
+	if got := string(Sidecar(m)); !strings.Contains(got, "Amélie — Jean-Pierre Jeunet") {
+		t.Error("XMP lost UTF-8")
+	}
 }
 
 func TestSidecarEscapesAndOmits(t *testing.T) {
