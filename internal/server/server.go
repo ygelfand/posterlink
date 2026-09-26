@@ -184,6 +184,7 @@ func (s *Server) handlePoster(w http.ResponseWriter, r *http.Request) {
 // with another image when one fails to download or does not validate.
 func (s *Server) handlePosterImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	allow := parseProviders(r.URL.Query().Get("providers"))
 	skip := s.bad.snapshot()
