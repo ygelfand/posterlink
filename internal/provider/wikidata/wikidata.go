@@ -9,10 +9,13 @@ package wikidata
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -21,9 +24,14 @@ import (
 )
 
 const (
-	endpoint = "https://query.wikidata.org/sparql"
-	painting = "wd:Q3305213" // instance of: painting
+	endpoint       = "https://query.wikidata.org/sparql"
+	painting       = "wd:Q3305213" // instance of: painting
+	uploadBase     = "https://upload.wikimedia.org/wikipedia/commons"
+	filePathPrefix = "/wiki/Special:FilePath/"
 )
+
+// thumbBuckets are the widths Commons stores rendered thumbnails at.
+var thumbBuckets = []int{330, 500, 960, 1280, 1920, 3840}
 
 func init() {
 	provider.Register("wikidata", New)
@@ -166,8 +174,6 @@ func label(s string) string {
 	return s
 }
 
-// imageURL upgrades the Commons FilePath URL to https and requests a scaled
-// width. A width <= 0 leaves the original (full-resolution) image.
 func imageURL(raw string, width int) string {
 	if raw == "" {
 		return ""
@@ -175,12 +181,78 @@ func imageURL(raw string, width int) string {
 	if after, ok := strings.CutPrefix(raw, "http://"); ok {
 		raw = "https://" + after
 	}
-	if width > 0 {
-		sep := "?"
-		if strings.Contains(raw, "?") {
-			sep = "&"
-		}
-		raw += sep + "width=" + strconv.Itoa(width)
+
+	name := commonsFile(raw)
+	if name == "" {
+		return filePathURL(raw, width)
 	}
-	return raw
+	enc := url.PathEscape(name)
+	dir := commonsDir(name)
+
+	w := bucket(width)
+	if w == 0 {
+		return uploadBase + "/" + dir + "/" + enc
+	}
+	return uploadBase + "/thumb/" + dir + "/" + enc + "/" + thumbLeaf(enc, w)
+}
+
+func commonsFile(raw string) string {
+	_, after, ok := strings.Cut(raw, filePathPrefix)
+	if !ok {
+		return ""
+	}
+	name, _, _ := strings.Cut(after, "?")
+	decoded, err := url.PathUnescape(name)
+	if err != nil {
+		return ""
+	}
+	decoded = strings.ReplaceAll(decoded, " ", "_")
+	if decoded == "" || strings.Contains(decoded, "/") {
+		return ""
+	}
+	return decoded
+}
+
+// Commons shards by the first one and two hex digits of the MD5 of the name.
+func commonsDir(name string) string {
+	sum := md5.Sum([]byte(name))
+	hex := hex.EncodeToString(sum[:])
+	return hex[:1] + "/" + hex[:2]
+}
+
+// upload.wikimedia.org serves stored thumbnails only; other widths 400.
+func bucket(width int) int {
+	if width <= 0 {
+		return 0
+	}
+	for _, b := range thumbBuckets {
+		if width <= b {
+			return b
+		}
+	}
+	return 0
+}
+
+// TIFFs render to JPEG and SVGs to PNG, under a different leaf name.
+func thumbLeaf(enc string, width int) string {
+	size := strconv.Itoa(width) + "px-" + enc
+	switch strings.ToLower(path.Ext(enc)) {
+	case ".tif", ".tiff":
+		return "lossy-page1-" + size + ".jpg"
+	case ".svg":
+		return size + ".png"
+	default:
+		return size
+	}
+}
+
+func filePathURL(raw string, width int) string {
+	if width <= 0 {
+		return raw
+	}
+	sep := "?"
+	if strings.Contains(raw, "?") {
+		sep = "&"
+	}
+	return raw + sep + "width=" + strconv.Itoa(width)
 }

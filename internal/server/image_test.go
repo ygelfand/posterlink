@@ -60,6 +60,9 @@ func newOrigin(t *testing.T, bodies map[string][]byte) *originServer {
 		case "/boom.jpg":
 			http.Error(w, "boom", http.StatusInternalServerError)
 			return
+		case "/throttled-a.jpg", "/throttled-b.jpg", "/throttled-c.jpg":
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+			return
 		case "/html.jpg":
 			w.Header().Set("Content-Type", "image/jpeg")
 			_, _ = w.Write([]byte("<html>not an image at all</html>"))
@@ -250,6 +253,57 @@ func TestPosterImageRemembersPermanentFailures(t *testing.T) {
 	resp.Body.Close()
 	if origin.hits.Load() == after {
 		t.Error("a refreshed pool did not clear the bad set")
+	}
+}
+
+func TestPosterImageThrottledSourceFallsBackToAnother(t *testing.T) {
+	origin := newOrigin(t, map[string][]byte{"/good.jpg": jpegBytes(t)})
+	s := newTestServer(t, []pool.Source{
+		{Name: "wikidata", Weight: 1000, Images: imgs(
+			origin.URL+"/throttled-a.jpg",
+			origin.URL+"/throttled-b.jpg",
+			origin.URL+"/throttled-c.jpg",
+		)},
+		{Name: "tmdb", Weight: 1, Images: imgs(origin.URL + "/good.jpg")},
+	})
+
+	for range 10 {
+		before := origin.hits.Load()
+		resp := get(t, s, "/poster.jpg")
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		if got := resp.Header.Get("X-Poster-Provider"); got != "tmdb" {
+			t.Fatalf("X-Poster-Provider = %q, want tmdb", got)
+		}
+		if _, err := jpeg.Decode(bytes.NewReader(body)); err != nil {
+			t.Fatalf("served bytes are not a decodable JPEG: %v", err)
+		}
+		if n := origin.hits.Load() - before; n > 2 {
+			t.Errorf("made %d requests; a 429 should move to the next source, not retry", n)
+		}
+	}
+	if s.bad.len() != 0 {
+		t.Errorf("a 429 was remembered as permanent (%d urls)", s.bad.len())
+	}
+}
+
+func TestPosterImageThrottledEverywhere(t *testing.T) {
+	origin := newOrigin(t, nil)
+	s := newTestServer(t, []pool.Source{src("wikidata", origin.URL+"/throttled-a.jpg")})
+
+	before := origin.hits.Load()
+	resp := get(t, s, "/poster.jpg")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+	if n := origin.hits.Load() - before; n != 1 {
+		t.Errorf("made %d requests; the only source was throttled, so want 1", n)
 	}
 }
 

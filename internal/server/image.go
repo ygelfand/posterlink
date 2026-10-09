@@ -28,6 +28,11 @@ const (
 	imageUserAgent = "posterlink"
 )
 
+var (
+	errRejected  = errors.New("image rejected")
+	errThrottled = errors.New("source throttled")
+)
+
 type fetched struct {
 	body []byte
 	mime string
@@ -71,46 +76,55 @@ func (b *badURLs) len() int {
 	return len(b.set)
 }
 
-func (s *Server) fetch(ctx context.Context, pick pool.Pick) (fetched, bool, error) {
+func (s *Server) fetch(ctx context.Context, pick pool.Pick) (fetched, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pick.URL, nil)
 	if err != nil {
-		return fetched{}, true, err
+		return fetched{}, fmt.Errorf("%w: %w", errRejected, err)
 	}
 	req.Header.Set("Accept", "image/*,*/*;q=0.8")
 	req.Header.Set("User-Agent", imageUserAgent)
 
 	resp, err := s.images.Do(req)
 	if err != nil {
-		return fetched{}, false, err
+		return fetched{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		permanent := resp.StatusCode >= 400 && resp.StatusCode < 500 &&
-			resp.StatusCode != http.StatusTooManyRequests
-		return fetched{}, permanent, fmt.Errorf("unexpected status %s", resp.Status)
+		return fetched{}, statusError(resp.StatusCode, resp.Status)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
 	if err != nil {
-		return fetched{}, false, err
+		return fetched{}, err
 	}
 	if len(body) > maxImageBytes {
-		return fetched{}, true, fmt.Errorf("image larger than %d bytes", maxImageBytes)
+		return fetched{}, fmt.Errorf("%w: image larger than %d bytes", errRejected, maxImageBytes)
 	}
 
 	mime, err := validate(body)
 	if err != nil {
-		return fetched{}, true, err
+		return fetched{}, fmt.Errorf("%w: %w", errRejected, err)
 	}
 
 	if tagged, ok, err := exifwrite.Apply(body, imageMeta(pick)); err == nil && ok {
 		body = tagged
 	}
-	return fetched{body: body, mime: mime}, false, nil
+	return fetched{body: body, mime: mime}, nil
+}
+
+func statusError(code int, status string) error {
+	switch {
+	case code == http.StatusTooManyRequests:
+		return fmt.Errorf("%w: unexpected status %s", errThrottled, status)
+	case code >= 400 && code < 500:
+		return fmt.Errorf("%w: unexpected status %s", errRejected, status)
+	default:
+		return fmt.Errorf("unexpected status %s", status)
+	}
 }
 
 func validate(body []byte) (string, error) {

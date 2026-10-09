@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -190,6 +191,7 @@ func (s *Server) handlePosterImage(w http.ResponseWriter, r *http.Request) {
 	skip := s.bad.snapshot()
 
 	attempted := 0
+attempts:
 	for range fetchAttempts {
 		pick, ok := s.pool.RandomPick(allow, skip)
 		if !ok {
@@ -197,7 +199,7 @@ func (s *Server) handlePosterImage(w http.ResponseWriter, r *http.Request) {
 		}
 		attempted++
 
-		img, permanent, err := s.fetch(r.Context(), pick)
+		img, err := s.fetch(r.Context(), pick)
 		if err == nil {
 			w.Header().Set("Content-Type", img.mime)
 			w.Header().Set("Content-Length", strconv.Itoa(len(img.body)))
@@ -210,11 +212,17 @@ func (s *Server) handlePosterImage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		s.log.Warn("image fetch failed", "provider", pick.Provider, "url", pick.URL,
-			"permanent", permanent, "error", err)
-		if permanent {
+		s.log.Warn("image fetch failed", "provider", pick.Provider, "url", pick.URL, "error", err)
+		switch {
+		case errors.Is(err, errThrottled):
+			allow = s.excluding(allow, pick.Provider)
+			if len(allow) == 0 {
+				break attempts
+			}
+		case errors.Is(err, errRejected):
 			s.bad.add(pick.URL)
 		}
+
 		if skip == nil {
 			skip = make(map[string]struct{})
 		}
@@ -229,6 +237,17 @@ func (s *Server) handlePosterImage(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "no images for requested providers", http.StatusNotFound)
 	}
+}
+
+func (s *Server) excluding(allow map[string]struct{}, name string) map[string]struct{} {
+	if allow == nil {
+		allow = make(map[string]struct{})
+		for source := range s.pool.Stats() {
+			allow[source] = struct{}{}
+		}
+	}
+	delete(allow, name)
+	return allow
 }
 
 // parseProviders splits a comma-delimited providers value into a set. Only
